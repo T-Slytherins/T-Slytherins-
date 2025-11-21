@@ -1,22 +1,44 @@
-First of all install requirments.sh
-
-chmod +x requiments.sh
-
-then make script executable
-
-chmod +x recon_slytherins
-
-thenn Run 
-
-python3 recon_slytherins
+# T-Slytherins-
+# Complete Recon Script (using amass, subfinder, asset finder, httpx, katana)
 
 
-![WhatsApp Image 2025-11-21 at 00 37 36_0965d2b6](https://github.com/user-attachments/assets/874f3610-55dd-49d8-b8af-02d963a7c0bc)
+first install requirments.txt 
+for installing just follow steps
+
+chmod +x requirements.sh
+then run (./requirements.sh)
 
 
-enter your target : 
+After that
+
+chmod +x recon_slytherins.py
+
+now run this command 
+
+./recon_slytherins or python3 recon_slytherins
+
+Enter your target domain:
+
+![WhatsApp Image 2025-11-21 at 00 37 35_463b48aa](https://github.com/user-attachments/assets/2e621388-6a94-4643-976c-f15f859d615c)
 
 
-wait to let the scan finish 
+and let the script work 
 
-Boom!
+it will do the following steps
+
+Starting recon and will Gather subdomains...
+
+Executing: amass
+
+Executing: subfinder
+
+Executing: assetfinder
+
+Deduplicating subdomains...
+
+Probing for live hosts with httpx...                                                                   
+
+Crawling URLs with Katana...                                                                           
+
+Recon Complete!                                                                                        
+Output saved in: T-SLYTHERINS-OUTPUT/  
