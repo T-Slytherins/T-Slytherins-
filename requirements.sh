@@ -1,14 +1,13 @@
 #!/bin/bash
-set -e  # stop script if any command fails
+set -e
 
 echo ""
 echo "=========================================="
-echo "   T-SLYTHERINS Recon Suite Installer"
+echo "  T-SLYTHERINS Recon Suite Installer"
 echo "=========================================="
 echo ""
 
 sleep 1
-
 
 # ------------------------------------------------------
 # 1. UPDATE SYSTEM
@@ -27,101 +26,77 @@ fi
 
 
 # ------------------------------------------------------
-# 3. INSTALL LATEST GO
+# 3. INSTALL NEW GO
 # ------------------------------------------------------
 echo "[3] Installing latest Go version..."
 
-# get only FIRST line of output (prevents "time ..." issue)
-LATEST_GO=$(curl -s https://go.dev/VERSION?m=text | head -n 1 | tr -d '\r')
-
-if [[ -z "$LATEST_GO" ]]; then
-    echo "✘ ERROR: Could not fetch Go version"
-    exit 1
-fi
-
+LATEST_GO=$(curl -s https://go.dev/VERSION?m=text)
 GO_URL="https://go.dev/dl/${LATEST_GO}.linux-amd64.tar.gz"
-echo "→ Downloading $GO_URL"
 
+echo "→ Downloading $LATEST_GO ..."
 wget -q "$GO_URL" -O /tmp/go.tar.gz
-
-# verify it REALLY is gzip
-if ! file /tmp/go.tar.gz | grep -q "gzip compressed data"; then
-    echo "✘ ERROR: Go download corrupted or invalid"
-    echo "    Received:"
-    file /tmp/go.tar.gz
-    exit 1
-fi
 
 sudo tar -C /usr/local -xzf /tmp/go.tar.gz
 rm /tmp/go.tar.gz
 
+# ------------------------------------------------------
+# 3B. GLOBAL PATH FIX (IMPORTANT!)
+# ------------------------------------------------------
+echo "[3B] Adding Go paths system-wide..."
+
+sudo tee /etc/profile.d/go_path.sh >/dev/null <<EOF
+export GOPATH=\$HOME/go
+export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin
+EOF
+
+sudo chmod +x /etc/profile.d/go_path.sh
+source /etc/profile.d/go_path.sh
+
 
 # ------------------------------------------------------
-# 3B. APPLY GO PATH TO THIS SCRIPT
+# 4. INSTALL APT TOOLS
 # ------------------------------------------------------
-echo "[3B] Updating PATH for Go..."
-
-export GOPATH=$HOME/go
-export PATH=$PATH:/usr/local/go/bin:$GOPATH/bin
-
-# persist in bashrc if not added before
-grep -qxF 'export GOPATH=$HOME/go' ~/.bashrc || echo 'export GOPATH=$HOME/go' >> ~/.bashrc
-grep -qxF 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' ~/.bashrc || echo 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' >> ~/.bashrc
-
-
-# ------------------------------------------------------
-# 4. INSTALL APT PACKAGES
-# ------------------------------------------------------
-echo "[4] Installing APT dependencies (amass)..."
-sudo apt install -y amass
+echo "[4] Installing APT tools..."
+sudo apt install -y amass xfce4-terminal
 
 
 # ------------------------------------------------------
 # 5. INSTALL GO-BASED TOOLS
 # ------------------------------------------------------
-if ! command -v go >/dev/null; then
-    echo "✘ ERROR: Go installation failed"
-    exit 1
-fi
+echo "[5] Installing Go-based tools..."
 
-echo "[5] Installing Subfinder..."
-go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
-
-echo "[6] Installing Httpx..."
-go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
-
-echo "[7] Installing Katana..."
-go install -v github.com/projectdiscovery/katana/cmd/katana@latest
-
-echo "[8] Installing Assetfinder..."
-go install -v github.com/tomnomnom/assetfinder@latest
+go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+go install github.com/projectdiscovery/katana/cmd/katana@latest
+go install github.com/tomnomnom/assetfinder@latest
 
 
 # ------------------------------------------------------
-# 6. VERIFY INSTALLATION
+# 6. VERIFY
 # ------------------------------------------------------
 echo ""
 echo "[✔] Checking installed tools..."
 
-TOOLS=(go amass subfinder httpx katana assetfinder)
-
-for tool in "${TOOLS[@]}"; do
+for tool in go amass subfinder assetfinder httpx katana; do
     if command -v $tool >/dev/null 2>&1; then
-        echo "   ✔ $tool found"
+        echo "   ✔ $tool OK"
     else
-        echo "   ✘ $tool NOT FOUND — installation failed!"
+        echo "   ✘ $tool NOT FOUND (PATH issue)"
     fi
 done
 
 
 # ------------------------------------------------------
-# 7. DONE
+# DONE
 # ------------------------------------------------------
 echo ""
 echo "=========================================="
 echo " ✔ INSTALLATION COMPLETE"
 echo "=========================================="
 echo ""
-echo "➡ Restart your terminal OR run:  source ~/.bashrc"
-echo "➡ Your recon suite is ready!"
+echo "➡ RUN THIS COMMAND to load everything NOW:"
+echo ""
+echo "     source /etc/profile.d/go_path.sh"
+echo ""
+echo "➡ Then run your recon tool normally."
 echo ""
