@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e  # Stop on any error
+set -e  # stop script if any command fails
 
 echo ""
 echo "=========================================="
@@ -8,6 +8,7 @@ echo "=========================================="
 echo ""
 
 sleep 1
+
 
 # ------------------------------------------------------
 # 1. UPDATE SYSTEM
@@ -30,22 +31,24 @@ fi
 # ------------------------------------------------------
 echo "[3] Installing latest Go version..."
 
-LATEST_GO=$(curl -s https://go.dev/VERSION?m=text)  # ex: go1.23.3
+# get only FIRST line of output (prevents "time ..." issue)
+LATEST_GO=$(curl -s https://go.dev/VERSION?m=text | head -n 1 | tr -d '\r')
 
-# Validate
 if [[ -z "$LATEST_GO" ]]; then
-    echo "✘ ERROR: Could not retrieve Go version"
+    echo "✘ ERROR: Could not fetch Go version"
     exit 1
 fi
 
 GO_URL="https://go.dev/dl/${LATEST_GO}.linux-amd64.tar.gz"
-
 echo "→ Downloading $GO_URL"
+
 wget -q "$GO_URL" -O /tmp/go.tar.gz
 
-# Verify file is a valid tar.gz
+# verify it REALLY is gzip
 if ! file /tmp/go.tar.gz | grep -q "gzip compressed data"; then
-    echo "✘ ERROR: Downloaded Go file is not a valid tar.gz"
+    echo "✘ ERROR: Go download corrupted or invalid"
+    echo "    Received:"
+    file /tmp/go.tar.gz
     exit 1
 fi
 
@@ -54,39 +57,30 @@ rm /tmp/go.tar.gz
 
 
 # ------------------------------------------------------
-# 3B. SETUP PATH FOR GO
+# 3B. APPLY GO PATH TO THIS SCRIPT
 # ------------------------------------------------------
 echo "[3B] Updating PATH for Go..."
 
-if ! grep -q "/usr/local/go/bin" ~/.bashrc; then
-    echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-fi
+export GOPATH=$HOME/go
+export PATH=$PATH:/usr/local/go/bin:$GOPATH/bin
 
-if ! grep -q '$HOME/go/bin' ~/.bashrc; then
-    echo 'export PATH=$PATH:$HOME/go/bin' >> ~/.bashrc
-fi
-
-# GOPATH
-if ! grep -q 'export GOPATH=' ~/.bashrc; then
-    echo 'export GOPATH=$HOME/go' >> ~/.bashrc
-fi
-
-source ~/.bashrc
+# persist in bashrc if not added before
+grep -qxF 'export GOPATH=$HOME/go' ~/.bashrc || echo 'export GOPATH=$HOME/go' >> ~/.bashrc
+grep -qxF 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' ~/.bashrc || echo 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' >> ~/.bashrc
 
 
 # ------------------------------------------------------
-# 4. INSTALL APT DEPENDENCIES
+# 4. INSTALL APT PACKAGES
 # ------------------------------------------------------
-echo "[4] Installing dependencies (xfce4-terminal, amass)..."
-sudo apt install -y xfce4-terminal amass
+echo "[4] Installing APT dependencies (amass)..."
+sudo apt install -y amass
 
 
 # ------------------------------------------------------
 # 5. INSTALL GO-BASED TOOLS
 # ------------------------------------------------------
-# Ensure Go is working
 if ! command -v go >/dev/null; then
-    echo "✘ ERROR: Go installation failed!"
+    echo "✘ ERROR: Go installation failed"
     exit 1
 fi
 
@@ -109,13 +103,13 @@ go install -v github.com/tomnomnom/assetfinder@latest
 echo ""
 echo "[✔] Checking installed tools..."
 
-TOOLS=(go amass subfinder httpx katana assetfinder xfce4-terminal)
+TOOLS=(go amass subfinder httpx katana assetfinder)
 
 for tool in "${TOOLS[@]}"; do
     if command -v $tool >/dev/null 2>&1; then
         echo "   ✔ $tool found"
     else
-        echo "   ✘ $tool NOT FOUND — something went wrong!"
+        echo "   ✘ $tool NOT FOUND — installation failed!"
     fi
 done
 
@@ -129,5 +123,5 @@ echo " ✔ INSTALLATION COMPLETE"
 echo "=========================================="
 echo ""
 echo "➡ Restart your terminal OR run:  source ~/.bashrc"
-echo "➡ You can now run your recon tool:  ./recon_slytherins"
+echo "➡ Your recon suite is ready!"
 echo ""
