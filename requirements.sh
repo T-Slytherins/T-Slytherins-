@@ -1,61 +1,54 @@
 #!/bin/bash
+set -e
+
+GREEN="\033[92m"
+RED="\033[91m"
+RESET="\033[0m"
 
 echo ""
 echo "=========================================="
-echo "  T-SLYTHERINS Recon Suite Installer"
+echo " T-SLYTHERINS Recon Suite Installer"
 echo "=========================================="
 echo ""
 
-sleep 1
-
-# Make script NEVER fail
-set +e
-
-log() { echo -e "\033[92m[+] $1\033[0m"; }
-err() { echo -e "\033[91m[✘] $1\033[0m"; }
-
-# ------------------------------------------------------
-log "Updating system..."
+# -------------------------------------------------------------------
+echo "[+] Updating system..."
 sudo apt update -y
 
-# ------------------------------------------------------
-log "Removing any old Go installation..."
-sudo rm -rf /usr/local/go
-rm -rf "$HOME/go"
-
-# ------------------------------------------------------
-log "Fetching latest Go version..."
-LATEST_GO=$(curl -s https://go.dev/VERSION?m=text)
+# -------------------------------------------------------------------
+echo "[+] Detecting latest Go version safely..."
+LATEST_GO=$(curl -s https://go.dev/VERSION?m=text | head -n 1)
 
 if [[ -z "$LATEST_GO" ]]; then
-    err "Could not fetch Go version! Using fallback: go1.23.3"
-    LATEST_GO="go1.23.3"
-fi
-
-GO_URL="https://go.dev/dl/${LATEST_GO}.linux-amd64.tar.gz"
-log "Downloading: $GO_URL"
-
-# Try normal download
-wget --no-check-certificate -O /tmp/go.tar.gz "$GO_URL"
-
-# On failure, retry using curl
-if [[ $? -ne 0 ]]; then
-    err "wget failed. Retrying with curl..."
-    curl -L "$GO_URL" -o /tmp/go.tar.gz
-fi
-
-if [[ ! -f /tmp/go.tar.gz ]]; then
-    err "Go download failed completely."
+    echo "${RED}[✘] Could not fetch latest Go version.${RESET}"
     exit 1
 fi
 
-# ------------------------------------------------------
-log "Extracting Go..."
-sudo tar -C /usr/local -xzf /tmp/go.tar.gz
-rm /tmp/go.tar.gz
+GO_TAR="${LATEST_GO}.linux-amd64.tar.gz"
+GO_URL="https://go.dev/dl/${GO_TAR}"
 
-# ------------------------------------------------------
-log "Creating system-wide Go PATH..."
+echo "[+] Latest Go = $LATEST_GO"
+echo "[+] Download URL = $GO_URL"
+
+# -------------------------------------------------------------------
+echo "[+] Removing any previous Go..."
+sudo rm -rf /usr/local/go
+
+echo "[+] Downloading Go..."
+wget -q "$GO_URL" -O /tmp/go.tar.gz || {
+    echo "${RED}[✘] wget failed, retrying with curl...${RESET}"
+    curl -L "$GO_URL" -o /tmp/go.tar.gz || {
+        echo "${RED}[✘] Both wget and curl failed — exiting.${RESET}"
+        exit 1
+    }
+}
+
+echo "[+] Extracting Go..."
+sudo tar -C /usr/local -xzf /tmp/go.tar.gz
+rm -f /tmp/go.tar.gz
+
+# -------------------------------------------------------------------
+echo "[+] Creating system-wide Go PATH..."
 sudo tee /etc/profile.d/golang.sh >/dev/null <<'EOF'
 export GOPATH="$HOME/go"
 export PATH="$PATH:/usr/local/go/bin:$HOME/go/bin"
@@ -64,37 +57,58 @@ EOF
 sudo chmod +x /etc/profile.d/golang.sh
 source /etc/profile.d/golang.sh
 
-# ------------------------------------------------------
-log "Installing APT dependencies..."
+# -------------------------------------------------------------------
+echo "[+] Installing APT dependencies..."
 sudo apt install -y amass xfce4-terminal python3 python3-pip
 
-# ------------------------------------------------------
-log "Installing Go tools (subfinder, httpx, katana, assetfinder)..."
+# -------------------------------------------------------------------
+echo "[+] Installing Go tools..."
+TOOLS=(
+    "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
+    "github.com/projectdiscovery/httpx/cmd/httpx@latest"
+    "github.com/projectdiscovery/katana/cmd/katana@latest"
+    "github.com/tomnomnom/assetfinder@latest"
+)
 
-go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
-go install github.com/projectdiscovery/httpx/cmd/httpx@latest
-go install github.com/projectdiscovery/katana/cmd/katana@latest
-go install github.com/tomnomnom/assetfinder@latest
+for TOOL in "${TOOLS[@]}"; do
+    echo "[+] Installing: $TOOL"
+    go install "$TOOL" || echo "${RED}[!] Failed installing $TOOL${RESET}"
+done
 
-# ------------------------------------------------------
-log "Verifying tools..."
+# -------------------------------------------------------------------
+echo "[+] Verifying tools..."
+CHECK_TOOLS=(go amass subfinder assetfinder httpx katana)
 
-TOOLS=(go amass subfinder assetfinder httpx katana)
-
-for tool in "${TOOLS[@]}"; do
-    if command -v "$tool" >/dev/null; then
-        log "$tool OK"
+for t in "${CHECK_TOOLS[@]}"; do
+    if command -v "$t" >/dev/null 2>&1; then
+        echo "   ✔ $t OK"
     else
-        err "$tool NOT FOUND — trying reinstall"
-        go install $(which "$tool")@latest 2>/dev/null
+        echo "   ✘ $t missing, reinstalling..."
+
+        case "$t" in
+            subfinder)
+                go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest ;;
+            httpx)
+                go install github.com/projectdiscovery/httpx/cmd/httpx@latest ;;
+            katana)
+                go install github.com/projectdiscovery/katana/cmd/katana@latest ;;
+            assetfinder)
+                go install github.com/tomnomnom/assetfinder@latest ;;
+            go)
+                echo "${RED}[!] GO missing — installation failed.${RESET}"
+                ;;
+        esac
     fi
 done
 
 echo ""
 echo "=========================================="
-echo "   INSTALLATION COMPLETE"
+echo "  INSTALLATION COMPLETE ✔"
 echo "=========================================="
 echo ""
-echo "➡ Run to activate:   source /etc/profile.d/golang.sh"
-echo "➡ Then start recon:  ./recon_slytherins"
+echo "➡ Run this to activate Go PATH NOW:"
+echo "   source /etc/profile.d/golang.sh"
+echo ""
+echo "➡ Then start recon:"
+echo "   ./recon_slytherins"
 echo ""
