@@ -2,86 +2,45 @@
 
 import os
 import subprocess
-import time
-import sys
 import shutil
-import signal
+import time
 
 GREEN = "\033[92m"
 RESET = "\033[0m"
 
-# -------------------------------------------------------
-# Ensure XFCE terminal is installed
-# -------------------------------------------------------
-def ensure_xfce_terminal():
-    if not shutil.which("xfce4-terminal"):
-        print(GREEN + "[!] xfce4-terminal not found. Installing..." + RESET)
-        subprocess.run(["sudo", "apt", "update", "-y"])
-        subprocess.run(["sudo", "apt", "install", "xfce4-terminal", "-y"])
-    else:
-        print(GREEN + "[✔] xfce4-terminal already installed." + RESET)
+TOOLS = {
+    "subfinder": "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+    "httpx": "github.com/projectdiscovery/httpx/cmd/httpx@latest",
+    "katana": "github.com/projectdiscovery/katana/cmd/katana@latest",
+    "assetfinder": "github.com/tomnomnom/assetfinder@latest"
+}
 
-# -------------------------------------------------------
-# Banner
-# -------------------------------------------------------
+def ensure_tool(tool):
+    """Auto-install tool if missing."""
+    if shutil.which(tool):
+        return True
+
+    print(GREEN + f"[!] Missing {tool}, installing..." + RESET)
+    if "go" not in os.environ["PATH"]:
+        subprocess.run("source /etc/profile.d/golang.sh", shell=True)
+
+    subprocess.run(f"go install {TOOLS[tool]}", shell=True)
+    return shutil.which(tool) is not None
+
+def ensure_all_tools():
+    print(GREEN + "[*] Checking required tools..." + RESET)
+    for tool in TOOLS:
+        ensure_tool(tool)
+
 def banner():
     print(GREEN + r"""
  _______      _______        __   __ _______ _     _ _______  ______ _____ __   _ _______
     |         |______ |        \_/      |    |_____| |______ |_____/   |   | \  | |______
     |         ______| |_____    |       |    |     | |______ |    \_ __|__ |  \_| ______|
 
-                 T  S L Y T H E R I N S   R E C O N   S U I T E
+      T  S L Y T H E R I N S   R E C O N   S U I T E
     """ + RESET)
 
-# -------------------------------------------------------
-# Launch snake in separate terminal
-# -------------------------------------------------------
-def launch_snake_terminal():
-    ensure_xfce_terminal()
-    print(GREEN + "[*] Launching snake animation window..." + RESET)
-
-    snake_frames = [
-        "(🐍     )",
-        "( 🐍    )",
-        "(  🐍   )",
-        "(   🐍  )",
-        "(    🐍 )",
-        "(     🐍)",
-        "(    🐍 )",
-        "(   🐍  )",
-        "(  🐍   )",
-        "( 🐍    )"
-    ]
-
-    # Temporary Python script for animation
-    tmp_file = "/tmp/snake_animation.py"
-    with open(tmp_file, "w") as f:
-        f.write(f"""
-import time
-frames = {snake_frames}
-try:
-    while True:
-        for f in frames:
-            print("\\033[92m" + f + "\\033[0m")
-            time.sleep(0.2)
-except KeyboardInterrupt:
-    pass
-""")
-
-    xfce_path = shutil.which("xfce4-terminal") or "/usr/bin/xfce4-terminal"
-    if os.path.exists(xfce_path):
-        return subprocess.Popen([
-            xfce_path,
-            "--geometry=50x10+50+50",
-            "--hold",       # Keep terminal open while animation runs
-            "-x", "python3", tmp_file
-        ])
-    print("[!] Could not launch snake animation. No supported terminal.")
-    return None
-
-# -------------------------------------------------------
-# Safe command execution
-# -------------------------------------------------------
 def run_cmd(cmd, output_file=None):
     print(GREEN + f"[+] Executing: {' '.join(cmd)}" + RESET)
     try:
@@ -92,10 +51,9 @@ def run_cmd(cmd, output_file=None):
     except Exception as e:
         print(f"[ERROR] {e}")
 
-# -------------------------------------------------------
-# Main recon routine
-# -------------------------------------------------------
 def recon(domain):
+    ensure_all_tools()
+
     outdir = "T-SLYTHERINS-OUTPUT"
     os.makedirs(outdir, exist_ok=True)
 
@@ -103,57 +61,29 @@ def recon(domain):
     live_json = f"{outdir}/live.json"
 
     print(GREEN + f"\n[!] Starting recon on: {domain}\n" + RESET)
-    time.sleep(1)
 
-    # Launch snake in separate terminal
-    snake_proc = launch_snake_terminal()
-
-    # -----------------------------
-    # Subdomain enumeration
-    # -----------------------------
-    print(GREEN + "[1] Gathering subdomains..." + RESET)
+    # SUBDOMAIN COLLECTION
     run_cmd(["amass", "enum", "-passive", "-d", domain], all_subs)
     run_cmd(["subfinder", "-silent", "-d", domain], all_subs)
     run_cmd(["assetfinder", domain], all_subs)
 
-    print(GREEN + "\n[+] Deduplicating subdomains..." + RESET)
     subprocess.run(f"sort -u {all_subs} -o {all_subs}", shell=True)
 
-    # -----------------------------
-    # HTTP probing
-    # -----------------------------
-    print(GREEN + "\n[2] Probing for live hosts with httpx..." + RESET)
+    # HTTP PROBING
     run_cmd([
         "httpx",
         "-l", all_subs,
-        "-title",
-        "-status-code",
-        "-tech-detect",
+        "-title", "-status-code", "-tech-detect",
         "-json"
     ], live_json)
 
-    # -----------------------------
-    # URL crawling with Katana
-    # -----------------------------
-    print(GREEN + "\n[3] Crawling URLs with Katana..." + RESET)
+    # CRAWLING
     run_cmd(["katana", "-list", all_subs, "-o", f"{outdir}/katana.txt"])
-
-    # -----------------------------
-    # Stop snake
-    # -----------------------------
-    if snake_proc:
-        try:
-            snake_proc.terminate()
-        except Exception:
-            pass
 
     print(GREEN + "\n[✔] Recon Complete!")
     print(f"[✔] Output saved in: {outdir}/\n" + RESET)
 
-# -------------------------------------------------------
-# Main entry
-# -------------------------------------------------------
 if __name__ == "__main__":
     banner()
-    target = input(GREEN + "Enter target domain: " + RESET)
+    target = input(GREEN + "Enter target domain: " + RESET).strip()
     recon(target)
