@@ -40,7 +40,8 @@ Extending the Framework
 Legal & Ethical Use
 Contact / Support
 
-⭐ Features
+⭐ Features:
+
 ✔ Full Recon Workflow Automation
 Runs all recon phases in parallel:
 Category	Tools
@@ -113,8 +114,6 @@ Operating System
 ✔ Parrot OS
 ✔ Ubuntu / Debian (with Firefox + X11 installed)
 
-```
-```
 Core Tools (installer installs automatically)
 Go (latest)
 Python 3.8+
