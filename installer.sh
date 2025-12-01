@@ -25,21 +25,19 @@ APT_PACKAGES=(
     python3-venv
     amass
     xfce4-terminal
-    firefox-esr     # Kali default Firefox
-    chromium        # Screenshot fallback
+    firefox-esr
+    chromium
     unzip
     wget
     curl
+    xvfb
+    scrot
 )
 
 for pkg in "${APT_PACKAGES[@]}"; do
     echo "[*] Installing $pkg ..."
     sudo apt install -y "$pkg" || echo -e "${YELLOW}[!] Skipped $pkg (not available)${RESET}"
 done
-
-# -------------------------------------------------------------------
-echo -e "${GREEN}[+] Installing Aquatone dependencies...${RESET}"
-sudo apt install -y xvfb scrot || true
 
 # -------------------------------------------------------------------
 echo -e "${GREEN}[+] Detecting latest Go version...${RESET}"
@@ -96,20 +94,43 @@ for tool in "${GO_TOOLS[@]}"; do
 done
 
 # -------------------------------------------------------------------
-echo -e "${GREEN}[+] Installing Python module dependencies...${RESET}"
+echo -e "${GREEN}[+] Creating Python Virtual Environment (venv)...${RESET}"
 
-pip3 install --upgrade pip
+if [[ ! -d "venv" ]]; then
+    python3 -m venv venv
+    echo -e "${GREEN}[+] venv created.${RESET}"
+else
+    echo -e "${YELLOW}[!] venv already exists — reusing it.${RESET}"
+fi
 
-REQUIREMENTS_FILE="requirements.txt"
+echo -e "${GREEN}[+] Activating virtual environment...${RESET}"
+source venv/bin/activate
 
-if [[ -f "$REQUIREMENTS_FILE" ]]; then
-    pip3 install -r "$REQUIREMENTS_FILE"
+echo -e "${GREEN}[+] Installing Python requirements inside venv...${RESET}"
+
+if [[ -f "requirements.txt" ]]; then
+    pip install --upgrade pip
+    pip install -r requirements.txt
 else
     echo -e "${YELLOW}[!] No requirements.txt found, skipping.${RESET}"
 fi
 
+deactivate
+
 # -------------------------------------------------------------------
-echo -e "${GREEN}[+] Checking essential tools...${RESET}"
+echo -e "${GREEN}[+] Creating auto-launch wrapper script...${RESET}"
+
+cat << 'EOF' > run_slytherins.sh
+#!/bin/bash
+source venv/bin/activate
+python3 recon_slytherins
+deactivate
+EOF
+
+chmod +x run_slytherins.sh
+
+# -------------------------------------------------------------------
+echo -e "${GREEN}[+] Verifying essential tools...${RESET}"
 
 TOOLS=(go amass subfinder httpx katana assetfinder firefox-esr chromium)
 
@@ -127,9 +148,10 @@ echo "=========================================="
 echo -e "   ${GREEN}INSTALLATION COMPLETE ✔${RESET}"
 echo "=========================================="
 echo ""
-echo "[*] Restart your terminal or run:"
-echo -e "      ${YELLOW}source /etc/profile.d/golang.sh${RESET}"
+echo -e "[*] Your virtual environment is ready: ${YELLOW}./venv/${RESET}"
+echo -e "[*] Start the recon suite using:"
+echo -e "      ${GREEN}./run_slytherins.sh${RESET}"
 echo ""
-echo "Then start the recon suite:"
-echo -e "      ${GREEN}./recon_slytherins${RESET}"
+echo -e "[*] If terminal doesn't recognize Go, run:"
+echo -e "      ${YELLOW}source /etc/profile.d/golang.sh${RESET}"
 echo ""
