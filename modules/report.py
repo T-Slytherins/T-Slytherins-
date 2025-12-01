@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Report Generation Module (Fixed)
+Report Generation Module 
 Fixes: Better HTML generation, error handling, data parsing
 """
 
