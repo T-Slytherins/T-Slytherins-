@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""
+Top-level orchestrator for T-SLYTHERINS. Uses modules/ for each tool.
+Each module runs in its own GUI terminal and writes its log files to T-SLYTHERINS-OUTPUT/.
+Spinner shown in main terminal; snake animation runs in its own terminal (Mode A).
+"""
+
+import os
+from pathlib import Path
+import time
+
+from modules.progress import Spinner
+from modules.snake import start_snake_terminal
+from modules.dnsscan import run as run_dnsscan
+from modules.portscan import run as run_portscan
+from modules.vulnscan import run as run_vulnscan
+from modules.screenshots import run as run_screenshots
+from modules.report import generate as generate_report
+
+OUTDIR = Path("T-SLYTHERINS-OUTPUT")
+OUTDIR.mkdir(exist_ok=True)
+
+def main():
+    print("\nT-SLYTHERINS Recon Suite — multi-terminal (Mode A: Firefox GUI screenshots)\n")
+    target = input("Enter target domain: ").strip()
+    if not target:
+        print("No domain given. Exiting.")
+        return
+
+    print("Make sure you have permission to scan this target.\n")
+
+    spinner = Spinner()
+    # register expected modules for spinner progress estimation
+    modules = ["dnsscan", "httpx", "aquatone", "nmap", "nuclei"]
+    for m in modules:
+        spinner.set_module_running(m, False)
+    spinner.start()
+
+    # start snake animation terminal
+    snake_proc = start_snake_terminal()
+
+    # 1) DNS / subdomain collection (amass, subfinder, assetfinder)
+    spinner.set_module_running("dnsscan", True)
+    allsubs = run_dnsscan(target)  # returns path to all_subdomains.txt
+    spinner.set_module_running("dnsscan", False)
+
+    # 2) screenshots: httpx + aquatone (httpx will create urls, aquatone will open Firefox windows)
+    spinner.set_module_running("httpx", True)
+    spinner.set_module_running("aquatone", True)
+    aqua_out, thumbs = run_screenshots(allsubs)
+    spinner.set_module_running("httpx", False)
+    spinner.set_module_running("aquatone", False)
+
+    # 3) nmap (ports)
+    spinner.set_module_running("nmap", True)
+    nmap_prefix = run_portscan(allsubs)
+    spinner.set_module_running("nmap", False)
+
+    # 4) nuclei
+    spinner.set_module_running("nuclei", True)
+    nuclei_log = run_vulnscan(allsubs)
+    spinner.set_module_running("nuclei", False)
+
+    # generate report (thumbnails saved locally)
+    report_path = generate_report(allsubs, nmap_prefix, nuclei_log, aqua_out, thumbs)
+
+    spinner.stop()
+    if snake_proc:
+        try:
+            snake_proc.terminate()
+        except Exception:
+            pass
+
+    print("\nRecon complete.")
+    print(f"Outputs: {OUTDIR.resolve()}")
+    print(f"Report: {report_path}")
+    print("GUI terminals launched for each module remain open so you can inspect results. Close them manually when done.")
+
+if __name__ == "__main__":
+    main()
