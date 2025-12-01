@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Vulnerability Scanning Module (Fixed)
+Vulnerability Scanning Module 
 Fixes: Better nuclei integration, rate limiting, output parsing
 """
 
