@@ -1,0 +1,485 @@
+#!/usr/bin/env python3
+"""
+T-SLYTHERINS Recon Suite — multi-terminal, snake animation, spinner,
+separate logs per tool, screenshots + thumbnails + optional upload,
+and simple HTML report.
+
+Features:
+- Each tool writes to its own logfile under T-SLYTHERINS-OUTPUT/
+- A GUI terminal tails each tool's logfile separately (one terminal per tool)
+- The main terminal shows a spinner progress (Option B)
+- Snake animation runs in its own terminal
+- Screenshots via aquatone; thumbnails generated with Pillow
+- Optional thumbnail upload: set env var UPLOAD_URL to an HTTP endpoint that accepts file POSTs
+- Generates T-SLYTHERINS-OUTPUT/report.html with combined outputs
+"""
+
+import os
+import subprocess
+import shutil
+import threading
+import time
+from pathlib import Path
+from datetime import datetime
+import sys
+import json
+
+# Optional imports for thumbnails/upload
+try:
+    from PIL import Image
+except Exception:
+    Image = None
+
+try:
+    import requests
+except Exception:
+    requests = None
+
+# ---------- Config ----------
+OUTDIR = Path("T-SLYTHERINS-OUTPUT")
+OUTDIR.mkdir(exist_ok=True)
+LOG = lambda name: str(OUTDIR / f"{name}.log")
+ALL_SUBS = str(OUTDIR / "all_subdomains.txt")
+URLS_FILE = str(OUTDIR / "urls.txt")
+AQUATONE_OUT = str(OUTDIR / "aquatone")
+THUMBS_DIR = Path(OUTDIR) / "aquatone" / "thumbs"
+THUMBS_DIR.mkdir(parents=True, exist_ok=True)
+UPLOAD_URL = os.environ.get("UPLOAD_URL", "").strip()  # optional HTTP endpoint for POST uploads
+
+REQUIRED = ["amass", "subfinder", "assetfinder", "httpx", "nmap", "nuclei", "aquatone"]
+
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+RESET = "\033[0m"
+
+# ---------- Utility ----------
+def which_bin(name):
+    return shutil.which(name) is not None
+
+def check_tools():
+    missing = [t for t in REQUIRED if not which_bin(t)]
+    if missing:
+        print(RED + "[!] Missing tools:" + RESET, ", ".join(missing))
+        print(YELLOW + "[!] Modules for missing tools will be skipped." + RESET)
+    else:
+        print(GREEN + "[+] All required tools found." + RESET)
+    return missing
+
+# ---------- Snake animation terminal ----------
+def start_snake_animation():
+    snake_script = "/tmp/t_slytherins_snake.sh"
+    with open(snake_script, "w") as f:
+        f.write("""#!/bin/bash
+frames=( "🐍      " "  🐍    " "    🐍  " "      🐍" "    🐍  " "  🐍    " )
+while true; do
+  for frame in "${frames[@]}"; do
+    echo -ne "\\r$frame SLITHERING..."
+    sleep 0.12
+  done
+done
+""")
+    os.chmod(snake_script, 0o755)
+
+    # try preferred terminals
+    terminals = [
+        ["xfce4-terminal", "--hold", "-e", snake_script],
+        ["xterm", "-hold", "-e", snake_script],
+        ["gnome-terminal", "--", snake_script],
+    ]
+    for t in terminals:
+        try:
+            return subprocess.Popen(t)
+        except FileNotFoundError:
+            continue
+    print(YELLOW + "[!] No GUI terminal found for snake animation; continuing without it." + RESET)
+    return None
+
+# ---------- Spinner (Option B) ----------
+class Spinner:
+    def __init__(self):
+        self.frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+        self.idx = 0
+        self.running = False
+        self.lock = threading.Lock()
+        self.modules = {}  # name -> running bool
+        self.thread = None
+
+    def start(self):
+        self.running = True
+        self.thread = threading.Thread(target=self._spin, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=1)
+
+    def set_module(self, name, running: bool):
+        with self.lock:
+            self.modules[name] = running
+
+    def _spin(self):
+        while self.running:
+            with self.lock:
+                active = [m for m, r in self.modules.items() if r]
+                completed = [m for m, r in self.modules.items() if not r]
+            frame = self.frames[self.idx % len(self.frames)]
+            self.idx += 1
+            pct = self._progress_pct()
+            if active:
+                status = ", ".join(active)
+                line = f"\r{frame}  [{pct:3d}%] Running: {status}    "
+            else:
+                line = f"\r{frame}  [{pct:3d}%] Idle.                     "
+            print(line, end="", flush=True)
+            time.sleep(0.12)
+        print("\r" + " " * 80 + "\r", end="", flush=True)
+
+    def _progress_pct(self):
+        with self.lock:
+            total = len(self.modules)
+            if total == 0:
+                return 0
+            completed = sum(1 for v in self.modules.values() if not v)
+            return int((completed / total) * 100)
+
+# ---------- Launch background process (keeps Popen for tracking) ----------
+def launch_tool_and_tail(cmd_list, log_path, module_name, spinner, open_terminal_tail=True):
+    """
+    Launch the actual command as a background process (stdout/stderr -> log_path).
+    Then (optionally) open a GUI terminal that tails that logfile so a user can watch it.
+    Returns the Popen and file handle and the tail terminal Popen (or None).
+    """
+    os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+    fh = open(log_path, "w", encoding="utf-8")
+    spinner.set_module(module_name, True)
+    print(f"\n[+] Launching {module_name}: {' '.join(cmd_list)} -> {log_path}")
+    # Launch the tool as a real child process we can track
+    try:
+        p = subprocess.Popen(cmd_list, stdout=fh, stderr=subprocess.STDOUT, text=True)
+    except Exception as e:
+        fh.write(f"ERROR launching {module_name}: {e}\n")
+        fh.flush()
+        fh.close()
+        spinner.set_module(module_name, False)
+        return None, None, None
+
+    tail_proc = None
+    if open_terminal_tail:
+        # open a GUI terminal tailing the log for this module
+        tail_cmd = f"bash -lc \"clear; echo 'T-SLYTHERINS - {module_name} (tailing {os.path.basename(log_path)})'; tail -f {log_path}\""
+        terminals = [
+            ["xfce4-terminal", "--hold", "-e", tail_cmd],
+            ["xterm", "-hold", "-e", "bash", "-lc", tail_cmd],
+            ["gnome-terminal", "--", "bash", "-lc", f"echo 'T-SLYTHERINS - {module_name}'; tail -f {log_path}"]
+        ]
+        for t in terminals:
+            try:
+                tail_proc = subprocess.Popen(t)
+                break
+            except FileNotFoundError:
+                continue
+        if tail_proc is None:
+            print(YELLOW + f"[!] Could not open GUI terminal to tail {module_name}. Check {log_path} manually." + RESET)
+
+    return p, fh, tail_proc
+
+# ---------- Post-processing: thumbnails & optional upload ----------
+def generate_thumbnails(aquatone_dir, thumb_out_dir, size=(300,200)):
+    if Image is None:
+        print(YELLOW + "[!] Pillow not installed; skipping thumbnail generation." + RESET)
+        return []
+    aquatone_dir = Path(aquatone_dir)
+    if not aquatone_dir.exists():
+        print(YELLOW + "[!] Aquatone output folder not found; skipping thumbnails." + RESET)
+        return []
+    images = sorted(aquatone_dir.glob("**/*.png"))
+    thumbs = []
+    for img in images:
+        try:
+            im = Image.open(img)
+            im.thumbnail(size)
+            out = thumb_out_dir / img.name
+            im.save(out)
+            thumbs.append(out)
+        except Exception as e:
+            print(YELLOW + f"[!] Failed to thumbnail {img}: {e}" + RESET)
+    return thumbs
+
+def upload_files(file_paths):
+    if not UPLOAD_URL:
+        print(YELLOW + "[!] UPLOAD_URL not set — skipping uploads." + RESET)
+        return {}
+    if requests is None:
+        print(YELLOW + "[!] requests not installed — cannot upload." + RESET)
+        return {}
+    uploaded = {}
+    for p in file_paths:
+        try:
+            with open(p, "rb") as fh:
+                files = {"file": (p.name, fh, "image/png")}
+                r = requests.post(UPLOAD_URL, files=files, timeout=30)
+            if r.status_code in (200,201):
+                # try to parse response JSON for a 'url' field
+                try:
+                    data = r.json()
+                    url = data.get("url") or data.get("link") or data.get("data", {}).get("link")
+                except Exception:
+                    url = r.text.strip()
+                uploaded[str(p)] = url
+                print(GREEN + f"[+] Uploaded {p} -> {url}" + RESET)
+            else:
+                print(YELLOW + f"[!] Upload failed {p}: HTTP {r.status_code}" + RESET)
+        except Exception as e:
+            print(YELLOW + f"[!] Upload error for {p}: {e}" + RESET)
+    return uploaded
+
+# ---------- Simple HTML report ----------
+def generate_html_report(outdir: Path, all_subs_file, nmap_base, nuclei_log, thumbs, uploaded_map):
+    report_file = outdir / "report.html"
+    now = datetime.utcnow().isoformat() + "Z"
+    subs = []
+    if Path(all_subs_file).exists():
+        subs = [l.strip() for l in open(all_subs_file, "r", encoding="utf-8") if l.strip()]
+    # read nuclei content (first 200 lines for preview)
+    nuclei_preview = ""
+    if Path(nuclei_log).exists():
+        try:
+            nuclei_preview = "\n".join(open(nuclei_log, "r", encoding="utf-8").read().splitlines()[:200])
+        except Exception:
+            nuclei_preview = ""
+    # find nmap xml/text output (nmap -oA prefix creates prefix.nmap, prefix.gnmap, prefix.xml)
+    nmap_text = ""
+    nmap_path = outdir / (nmap_base + ".nmap")
+    if nmap_path.exists():
+        try:
+            nmap_text = "\n".join(open(nmap_path, "r", encoding="utf-8").read().splitlines()[:400])
+        except Exception:
+            nmap_text = ""
+
+    # build gallery HTML
+    gallery_items = []
+    for thumb in thumbs:
+        thumb_rel = os.path.relpath(thumb, outdir)
+        orig = os.path.relpath(thumb.with_suffix(".png"), outdir) if thumb.name.endswith(".png") else thumb_rel
+        uploaded_link = uploaded_map.get(str(thumb), "")
+        gallery_items.append((thumb_rel, uploaded_link))
+
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>T-SLYTHERINS Report - {outdir.name}</title>
+<style>
+body{{font-family: Arial,Helvetica,sans-serif; background:#0f1720; color:#e6eef6; padding:20px}}
+h1{{color:#6ee7b7}}
+.section{{margin-bottom:24px; padding:12px; background:#071022; border-radius:8px}}
+.thumb{{width:300px; margin:8px}}
+.thumb img{{max-width:100%; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.6)}}
+.smallpre{{white-space:pre-wrap; background:#041021; padding:10px; border-radius:6px; color:#bfe6ff; max-height:300px; overflow:auto}}
+</style>
+</head>
+<body>
+<h1>T-SLYTHERINS Report</h1>
+<p>Generated: {now}</p>
+
+<div class="section">
+<h2>Subdomains ({len(subs)})</h2>
+<ul>
+{''.join(f'<li>{s}</li>' for s in subs[:500])}
+</ul>
+</div>
+
+<div class="section">
+<h2>Nmap (summary)</h2>
+<div class="smallpre">{nmap_text or 'Nmap output not available.'}</div>
+</div>
+
+<div class="section">
+<h2>Nuclei Findings (preview)</h2>
+<div class="smallpre">{nuclei_preview or 'No nuclei output.'}</div>
+</div>
+
+<div class="section">
+<h2>Screenshots / Thumbnails</h2>
+<div>
+{"".join(f'<div class="thumb"><a href="{thumb}"><img src="{thumb}" alt="thumb"/></a><div>Uploaded: {uploaded or "n/a"}</div></div>' for (thumb, uploaded) in gallery_items)}
+</div>
+</div>
+
+</body>
+</html>
+"""
+    with open(report_file, "w", encoding="utf-8") as fh:
+        fh.write(html)
+    print(GREEN + f"[+] HTML report written: {report_file}" + RESET)
+    return report_file
+
+# ---------- Main recon flow ----------
+def recon(domain):
+    missing = check_tools()
+
+    # clear output directory
+    OUTDIR.mkdir(exist_ok=True)
+    open(ALL_SUBS, "w").close()
+    if Path(URLS_FILE).exists():
+        os.remove(URLS_FILE)
+
+    spinner = Spinner()
+
+    # Define modules and commands (each writes to its own log)
+    modules = {}
+
+    # collectors
+    if "amass" not in missing:
+        modules["amass"] = ["amass", "enum", "-passive", "-d", domain]
+    if "subfinder" not in missing:
+        modules["subfinder"] = ["subfinder", "-silent", "-d", domain, "-o", LOG("subfinder")]
+    if "assetfinder" not in missing:
+        modules["assetfinder"] = ["assetfinder", domain]
+
+    # httpx to validate live hosts and produce URLS_FILE
+    if "httpx" not in missing:
+        modules["httpx"] = ["httpx", "-l", ALL_SUBS, "-silent", "-status-code", "-title", "-o", URLS_FILE]
+
+    # nmap (ports) (use -iL with ALL_SUBS)
+    if "nmap" not in missing:
+        modules["nmap"] = ["nmap", "-iL", ALL_SUBS, "-Pn", "-sV", "-T4", "-oA", str(OUTDIR / "nmap")]
+
+    # nuclei
+    if "nuclei" not in missing:
+        modules["nuclei"] = ["nuclei", "-l", ALL_SUBS, "-o", LOG("nuclei"), "-retries", "1"]
+
+    # aquatone: uses URLS_FILE
+    if "aquatone" not in missing:
+        # we'll run via bash -c that checks for URLS_FILE non-empty
+        modules["aquatone"] = ["bash", "-lc", f"if [ -s {URLS_FILE} ]; then cat {URLS_FILE} | aquatone -out {AQUATONE_OUT}; else echo 'No URLs for aquatone (empty)'; fi"]
+
+    # register modules in spinner
+    spinner.start()
+    for name in modules.keys():
+        spinner.set_module(name, False)
+
+    # start snake animation terminal
+    snake_proc = start_snake_animation()
+
+    # For each module, launch process writing to its own logfile
+    procs = {}
+    tails = {}
+    files = {}
+    for name, cmd in modules.items():
+        logpath = LOG(name)
+        # Ensure previous log removed
+        try:
+            os.remove(logpath)
+        except Exception:
+            pass
+        p, fh, tail = launch_tool_and_tail(cmd, logpath, name, spinner, open_terminal_tail=True)
+        if p:
+            procs[name] = p
+            files[name] = fh
+            tails[name] = tail
+        else:
+            spinner.set_module(name, False)
+
+    # Special handling: wait for collectors to finish and merge subdomains into ALL_SUBS
+    collectors = [n for n in ("amass", "subfinder", "assetfinder") if n in procs]
+    for name in collectors:
+        p = procs.get(name)
+        if not p:
+            spinner.set_module(name, False)
+            continue
+        p.wait()
+        if files.get(name):
+            files[name].close()
+        spinner.set_module(name, False)
+        print(f"\n[+] {name} finished. Merging results into {ALL_SUBS}")
+        # Append domain-like lines from logs into ALL_SUBS in a naive but practical way
+        try:
+            with open(LOG(name), "r", encoding="utf-8", errors="ignore") as fh_in, open(ALL_SUBS, "a", encoding="utf-8") as fh_out:
+                for line in fh_in:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # naive heuristics: hostnames contain domain or have dots
+                    if "." in line:
+                        fh_out.write(line + "\n")
+        except Exception as e:
+            print(YELLOW + f"[!] Merge error for {name}: {e}" + RESET)
+        # dedupe ALL_SUBS
+        try:
+            with open(ALL_SUBS, "r", encoding="utf-8") as fh:
+                lines = sorted(set(l.strip() for l in fh if l.strip()))
+            with open(ALL_SUBS, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + ("\n" if lines else ""))
+        except Exception:
+            pass
+
+    # Wait a bit to give httpx a chance to run after collectors
+    # Wait for httpx explicitly if present
+    if "httpx" in procs:
+        p = procs.get("httpx")
+        if p:
+            p.wait()
+            if files.get("httpx"):
+                files["httpx"].close()
+            spinner.set_module("httpx", False)
+            print("\n[+] httpx finished.")
+
+    # Launch/await remaining modules (nmap, nuclei, aquatone)
+    for name in ("nmap", "nuclei", "aquatone"):
+        if name in procs:
+            p = procs[name]
+            p.wait()
+            if files.get(name):
+                files[name].close()
+            spinner.set_module(name, False)
+            print(f"\n[+] {name} finished.")
+
+    # Post processing: thumbnails & optional upload
+    thumbs = []
+    if Path(AQUATONE_OUT).exists():
+        # find PNGs inside aquatone folder (aquatone creates domain directories)
+        thumbs = generate_thumbnails(AQUATONE_OUT, THUMBS_DIR)
+    else:
+        print(YELLOW + "[!] Aquatone output directory not found; skipping thumbnails." + RESET)
+
+    uploaded_map = {}
+    if thumbs:
+        uploaded_map = upload_files(thumbs)
+
+    # Generate simple HTML report
+    report = generate_html_report(OUTDIR, ALL_SUBS, "nmap", LOG("nuclei"), thumbs, uploaded_map)
+
+    # Stop spinner and snake
+    spinner.stop()
+    if snake_proc:
+        try:
+            snake_proc.terminate()
+        except Exception:
+            pass
+
+    print(GREEN + "\n[✔] Recon complete." + RESET)
+    print(GREEN + f"[✔] Outputs: {OUTDIR.resolve()}" + RESET)
+    print(GREEN + f"[✔] Report: {report.resolve()}" + RESET)
+    print(YELLOW + "[!] GUI tail terminals remain open; close them manually when ready." + RESET)
+
+# ---------- Banner & main ----------
+def banner():
+    print(GREEN + r"""
+ _______      _______        __   __ _______ _     _ _______  ______ _____ __   _ _______
+    |         |______ |        \_/      |    |_____| |______ |_____/   |   | \  | |______
+    |         ______| |_____    |       |    |     | |______ |    \_ __|__ |  \_| ______|
+
+      T  S L Y T H E R I N S   R E C O N   S U I T E (MULTI-TERM + REPORT)
+    """ + RESET)
+
+if __name__ == "__main__":
+    banner()
+    target = input(GREEN + "Enter target domain: " + RESET).strip()
+    if not target:
+        print(RED + "No domain provided, exiting." + RESET)
+        sys.exit(1)
+    print(YELLOW + "[!] Make sure you are authorized to test this target." + RESET)
+    recon(target)
