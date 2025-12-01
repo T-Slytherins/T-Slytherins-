@@ -161,3 +161,29 @@ echo -e "    2. Verify: ${GREEN}subfinder -version${NC}"
 echo -e "    3. Execute: ${GREEN}./recon_slytherins${NC}"
 echo ""
 echo -e "${YELLOW}[*] Note: Logout and login again for PATH changes to take effect${NC}"
+
+
+# Create Python virtual environment
+VENV_DIR="$ACTUAL_HOME/recon_venv"
+echo -e "${YELLOW}[*] Setting up Python virtual environment at $VENV_DIR...${NC}"
+su - "$ACTUAL_USER" -c "python3 -m venv $VENV_DIR" || {
+    echo -e "${RED}[!] Failed to create virtual environment${NC}"
+    exit 1
+}
+
+# Activate virtual environment and install Python dependencies inside it
+echo -e "${YELLOW}[*] Activating virtual environment and installing Python packages...${NC}"
+su - "$ACTUAL_USER" -c "source $VENV_DIR/bin/activate && pip install --upgrade pip && pip install pillow requests python-nmap dnspython" || {
+    echo -e "${RED}[!] Failed to install Python packages in virtual environment${NC}"
+    exit 1
+}
+
+# Add virtual environment activation to main script (optional)
+if [ -f "./recon_slytherins" ]; then
+    echo -e "${YELLOW}[*] Adding virtual environment auto-activation to main script...${NC}"
+    su - "$ACTUAL_USER" -c "sed -i '1i source $VENV_DIR/bin/activate' ./recon_slytherins" || {
+        echo -e "${RED}[!] Failed to modify main script for venv activation${NC}"
+    }
+fi
+
+echo -e "${GREEN}[✓] Virtual environment ready and integrated${NC}"
