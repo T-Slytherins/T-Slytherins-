@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+
+"""
+T-SLYTHERINS Recon Suite - Main Script 
+Fixes: Better error handling, terminal detection, process management
+"""
+
+import os
+import sys
+import time
+import signal
+import subprocess
+import threading
+from pathlib import Path
+
+# Color codes
+class Colors:
+    RED = '\033[0;31m'
+    GREEN = '\033[0;32m'
+    YELLOW = '\033[1;33m'
+    BLUE = '\033[0;34m'
+    PURPLE = '\033[0;35m'
+    CYAN = '\033[0;36m'
+    NC = '\033[0m'
+
+# Global process list for cleanup
+processes = []
+
+def signal_handler(sig, frame):
+    """Handle Ctrl+C gracefully"""
+    print(f"\n{Colors.YELLOW}[*] Shutting down gracefully...{Colors.NC}")
+    cleanup_processes()
+    sys.exit(0)
+
+def cleanup_processes():
+    """Kill all spawned processes"""
+    for proc in processes:
+        try:
+            if proc.poll() is None:  # Process is still running
+                proc.terminate()
+                proc.wait(timeout=3)
+        except:
+            try:
+                proc.kill()
+            except:
+                pass
+
+def check_requirements():
+    """Verify all required tools are installed"""
+    print(f"{Colors.YELLOW}[*] Checking requirements...{Colors.NC}")
+    
+    required_tools = {
+        'amass': 'Amass',
+        'subfinder': 'Subfinder',
+        'assetfinder': 'Assetfinder',
+        'httpx': 'Httpx',
+        'nmap': 'Nmap',
+        'nuclei': 'Nuclei',
+        'katana': 'Katana',
+        'aquatone': 'Aquatone'
+    }
+    
+    missing = []
+    for tool, name in required_tools.items():
+        if not which(tool):
+            missing.append(name)
+    
+    if missing:
+        print(f"{Colors.RED}[!] Missing tools: {', '.join(missing)}{Colors.NC}")
+        print(f"{Colors.YELLOW}[*] Run './installer.sh' first{Colors.NC}")
+        return False
+    
+    print(f"{Colors.GREEN}[✓] All tools available{Colors.NC}")
+    return True
+
+def which(program):
+    """Check if program exists in PATH"""
+    from shutil import which as shutil_which
+    return shutil_which(program) is not None
+
+def detect_terminal():
+    """Detect available terminal emulator"""
+    terminals = [
+        'gnome-terminal',
+        'xfce4-terminal',
+        'konsole',
+        'xterm',
+        'terminator',
+        'mate-terminal'
+    ]
+    
+    for term in terminals:
+        if which(term):
+            return term
+    
+    return None
+
+def get_terminal_command(terminal, title, command):
+    """Generate terminal command based on emulator type"""
+    if not terminal:
+        return None
+    
+    if terminal == 'gnome-terminal':
+        return [terminal, '--', 'bash', '-c', f'{command}; exec bash']
+    elif terminal == 'xfce4-terminal':
+        return [terminal, '--title', title, '--hold', '-e', f'bash -c "{command}"']
+    elif terminal == 'konsole':
+        return [terminal, '--title', title, '-e', 'bash', '-c', f'{command}; exec bash']
+    elif terminal == 'xterm':
+        return [terminal, '-title', title, '-hold', '-e', f'bash -c "{command}"']
+    elif terminal in ['terminator', 'mate-terminal']:
+        return [terminal, '--title', title, '-e', f'bash -c "{command}; exec bash"']
+    
+    return None
+
+def banner():
+    """Display banner"""
+    print(f"""{Colors.PURPLE}
+╔═════════════════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                             ║
+║  _______      _______        __   __ _______ _     _ _______  ______ _____ __   _ _______   ║
+║     |         |______ |        \_/      |    |_____| |______ |_____/   |   | \  | |______   ║
+║     |         ______| |_____    |       |    |     | |______ |    \_ __|__ |  \_|  ______|  ║
+║                                                                                             ║
+║                                                                                             ║
+║       Advanced Reconnaissance Framework v2.0 ~ T-SLYTHERINS Team ~ Pr0Fessor_SnApe          ║
+╚═════════════════════════════════════════════════════════════════════════════════════════════╝
+{Colors.NC}""")
+
+def validate_domain(domain):
+    """Validate domain format"""
+    import re
+    pattern = r'^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$'
+    return re.match(pattern, domain) is not None
+
+def create_output_dir(domain):
+    """Create output directory structure"""
+    base_dir = f"T-SLYTHERINS-OUTPUT-{domain}"
+    dirs = [
+        base_dir,
+        f"{base_dir}/dns",
+        f"{base_dir}/ports",
+        f"{base_dir}/nuclei",
+        f"{base_dir}/aquatone/screenshots",
+        f"{base_dir}/aquatone/thumbs"
+    ]
+    
+    for d in dirs:
+        Path(d).mkdir(parents=True, exist_ok=True)
+    
+    return base_dir
+
+def run_module_in_terminal(terminal, module_name, command, output_file):
+    """Run a module in a separate terminal"""
+    if not terminal:
+        print(f"{Colors.YELLOW}[*] No terminal found, running in background: {module_name}{Colors.NC}")
+        # Run in background without terminal
+        try:
+            with open(output_file, 'w') as f:
+                proc = subprocess.Popen(
+                    command,
+                    shell=True,
+                    stdout=f,
+                    stderr=subprocess.STDOUT,
+                    preexec_fn=os.setsid
+                )
+                processes.append(proc)
+                return proc
+        except Exception as e:
+            print(f"{Colors.RED}[!] Error running {module_name}: {e}{Colors.NC}")
+            return None
+    
+    # Run in terminal
+    full_command = f"{command} 2>&1 | tee {output_file}"
+    term_cmd = get_terminal_command(terminal, module_name, full_command)
+    
+    if term_cmd:
+        try:
+            proc = subprocess.Popen(term_cmd)
+            processes.append(proc)
+            return proc
+        except Exception as e:
+            print(f"{Colors.RED}[!] Error launching terminal for {module_name}: {e}{Colors.NC}")
+            return None
+    
+    return None
+
+def main():
+    """Main execution function"""
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    banner()
+    
+    # Check requirements
+    if not check_requirements():
+        sys.exit(1)
+    
+    # Detect terminal
+    terminal = detect_terminal()
+    if not terminal:
+        print(f"{Colors.YELLOW}[!] No terminal emulator found. Modules will run in background.{Colors.NC}")
+        response = input(f"{Colors.YELLOW}Continue? (y/n): {Colors.NC}")
+        if response.lower() != 'y':
+            sys.exit(0)
+    else:
+        print(f"{Colors.GREEN}[✓] Using terminal: {terminal}{Colors.NC}")
+    
+    # Get target domain
+    domain = input(f"\n{Colors.CYAN}[?] Enter target domain: {Colors.NC}").strip()
+    
+    if not domain:
+        print(f"{Colors.RED}[!] Domain cannot be empty{Colors.NC}")
+        sys.exit(1)
+    
+    if not validate_domain(domain):
+        print(f"{Colors.RED}[!] Invalid domain format{Colors.NC}")
+        sys.exit(1)
+    
+    # Create output directory
+    output_dir = create_output_dir(domain)
+    print(f"{Colors.GREEN}[✓] Output directory: {output_dir}{Colors.NC}")
+    
+    # Check if modules directory exists
+    if not os.path.exists('modules'):
+        print(f"{Colors.RED}[!] Modules directory not found{Colors.NC}")
+        sys.exit(1)
+    
+    print(f"\n{Colors.YELLOW}[*] Starting reconnaissance...{Colors.NC}\n")
+    
+    # Module configurations
+    modules = [
+        {
+            'name': 'Subdomain Enumeration',
+            'command': f'python3 modules/subdomains.py {domain} {output_dir}',
+            'output': f'{output_dir}/subdomains.log'
+        },
+        {
+            'name': 'DNS Reconnaissance',
+            'command': f'python3 modules/dnsscan.py {domain} {output_dir}',
+            'output': f'{output_dir}/dns.log'
+        },
+        {
+            'name': 'Port Scanning',
+            'command': f'python3 modules/portscan.py {domain} {output_dir}',
+            'output': f'{output_dir}/portscan.log'
+        },
+        {
+            'name': 'HTTP Probing',
+            'command': f'python3 modules/httprobe.py {domain} {output_dir}',
+            'output': f'{output_dir}/httprobe.log'
+        },
+        {
+            'name': 'Vulnerability Scanning',
+            'command': f'python3 modules/vulnscan.py {domain} {output_dir}',
+            'output': f'{output_dir}/vulnscan.log'
+        },
+        {
+            'name': 'Web Crawling',
+            'command': f'python3 modules/crawl.py {domain} {output_dir}',
+            'output': f'{output_dir}/crawl.log'
+        }
+    ]
+    
+    # Launch modules
+    for module in modules:
+        print(f"{Colors.CYAN}[*] Launching: {module['name']}{Colors.NC}")
+        run_module_in_terminal(
+            terminal,
+            module['name'],
+            module['command'],
+            module['output']
+        )
+        time.sleep(1)  # Small delay between launches
+    
+    # Start progress monitor in main terminal
+    print(f"\n{Colors.GREEN}[✓] All modules launched{Colors.NC}")
+    print(f"{Colors.YELLOW}[*] Monitoring progress... Press Ctrl+C to stop{Colors.NC}\n")
+    
+    try:
+        # Simple progress display
+        spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+        i = 0
+        while True:
+            print(f"\r{Colors.CYAN}{spinner[i % len(spinner)]} Reconnaissance in progress...{Colors.NC}", end='')
+            time.sleep(0.1)
+            i += 1
+    except KeyboardInterrupt:
+        signal_handler(None, None)
+    
+    print(f"\n\n{Colors.GREEN}[✓] Reconnaissance complete!{Colors.NC}")
+    print(f"{Colors.YELLOW}[*] Output saved to: {output_dir}{Colors.NC}")
+    print(f"{Colors.YELLOW}[*] Generate report: python3 modules/report.py {output_dir}{Colors.NC}")
+
+if __name__ == "__main__":
+    main()
