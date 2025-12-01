@@ -60,6 +60,7 @@ def banner():
     |         ______| |_____    |       |    |     | |______ |    \_ __|__ |  \_| ______|
 
       T  S L Y T H E R I N S   R E C O N   S U I T E
+        Owned by T-Slytherins ~ Crafted by Pr0fessor_SnApe
     """ + RESET)
 
 # ----------------------------
