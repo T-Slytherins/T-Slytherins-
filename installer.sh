@@ -1,127 +1,163 @@
 #!/bin/bash
 
-set -e
+# T-SLYTHERINS Installer Script
+# Fixes: Better error handling, path management, dependency checks
 
-echo ""
-echo "=========================================="
-echo "     T‑SLYTHERINS Recon Suite Installer"
-echo "=========================================="
-echo ""
+set -e  # Exit on error
 
-# -----------------------------------------------------------
-# 1. UPDATE SYSTEM
-# -----------------------------------------------------------
-echo "[+] Updating APT..."
-sudo apt update -y
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-# -----------------------------------------------------------
-# 2. INSTALL APT DEPENDENCIES
-# -----------------------------------------------------------
-APT_PACKAGES=(
-    python3
-    python3-venv
-    python3-pip
-    amass
-    xfce4-terminal
-    firefox-esr
-    chromium
-    unzip
-    wget
-    curl
-    xvfb
-    scrot
-    libid3tag0
-    libimlib2t64
+echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║           T-SLYTHERINS Installer       ║${NC}"
+echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
+
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+   echo -e "${RED}[!] This script must be run as root (use sudo)${NC}" 
+   exit 1
+fi
+
+# Detect the actual user (not root)
+ACTUAL_USER="${SUDO_USER:-$USER}"
+ACTUAL_HOME=$(eval echo ~$ACTUAL_USER)
+
+echo -e "${YELLOW}[*] Installing for user: $ACTUAL_USER${NC}"
+echo -e "${YELLOW}[*] Home directory: $ACTUAL_HOME${NC}"
+
+# Function to check command existence
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to install package
+install_package() {
+    local package=$1
+    if ! dpkg -l | grep -q "^ii  $package"; then
+        echo -e "${YELLOW}[*] Installing $package...${NC}"
+        apt-get install -y "$package" || {
+            echo -e "${RED}[!] Failed to install $package${NC}"
+            return 1
+        }
+    else
+        echo -e "${GREEN}[✓] $package already installed${NC}"
+    fi
+}
+
+# Update package list
+echo -e "${YELLOW}[*] Updating package lists...${NC}"
+apt-get update -qq
+
+# Install system dependencies
+echo -e "${YELLOW}[*] Installing system dependencies...${NC}"
+SYSTEM_DEPS=(
+    "wget"
+    "curl"
+    "git"
+    "python3"
+    "python3-pip"
+    "nmap"
+    "firefox-esr"
+    "chromium"
+    "xterm"
+    "gnome-terminal"
 )
 
-echo "[+] Installing required APT packages..."
-for pkg in "${APT_PACKAGES[@]}"; do
-    echo "[*] Installing $pkg ..."
-    sudo apt install -y "$pkg" >/dev/null 2>&1 || echo "[!] Warning: Failed to install $pkg (may already exist)"
+for dep in "${SYSTEM_DEPS[@]}"; do
+    install_package "$dep"
 done
 
-# -----------------------------------------------------------
-# 3. INSTALL GO
-# -----------------------------------------------------------
-echo "[+] Detecting latest Go version..."
-LATEST_GO=$(curl -s https://go.dev/VERSION?m=text | head -n 1)
-echo "[+] Latest Go Version: $LATEST_GO"
-
-GO_URL="https://go.dev/dl/${LATEST_GO}.linux-amd64.tar.gz"
-echo "[+] Downloading: $GO_URL"
-wget -q "$GO_URL" -O /tmp/go.tar.gz
-
-echo "[+] Extracting Go..."
-sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf /tmp/go.tar.gz
-rm /tmp/go.tar.gz
-
-echo "[+] Configuring Go PATH..."
-if ! grep -q "export PATH=\$PATH:/usr/local/go/bin" ~/.bashrc; then
-    echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+# Install Go
+echo -e "${YELLOW}[*] Checking Go installation...${NC}"
+if ! command_exists go; then
+    echo -e "${YELLOW}[*] Installing Go...${NC}"
+    GO_VERSION="1.21.5"
+    wget -q "https://golang.org/dl/go${GO_VERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz
+    rm -rf /usr/local/go
+    tar -C /usr/local -xzf /tmp/go.tar.gz
+    rm /tmp/go.tar.gz
+    
+    # Set up Go environment for all users
+    cat > /etc/profile.d/golang.sh <<EOF
+export GOROOT=/usr/local/go
+export GOPATH=\$HOME/go
+export PATH=\$PATH:\$GOROOT/bin:\$GOPATH/bin
+EOF
+    chmod +x /etc/profile.d/golang.sh
+    
+    # Also set for current session
+    export GOROOT=/usr/local/go
+    export GOPATH="$ACTUAL_HOME/go"
+    export PATH=$PATH:$GOROOT/bin:$GOPATH/bin
+    
+    echo -e "${GREEN}[✓] Go installed successfully${NC}"
+else
+    echo -e "${GREEN}[✓] Go already installed${NC}"
+    # Ensure Go paths are set
+    export GOROOT=/usr/local/go
+    export GOPATH="$ACTUAL_HOME/go"
+    export PATH=$PATH:$GOROOT/bin:$GOPATH/bin
 fi
 
-export PATH="$PATH:/usr/local/go/bin"
+# Create Go directories with proper permissions
+mkdir -p "$GOPATH"/{bin,src,pkg}
+chown -R "$ACTUAL_USER:$ACTUAL_USER" "$GOPATH"
 
-# -----------------------------------------------------------
-# 4. INSTALL GO RECON TOOLS
-# -----------------------------------------------------------
-echo "[+] Installing Go-based Recon Tools..."
+# Install Python dependencies
+echo -e "${YELLOW}[*] Installing Python dependencies...${NC}"
+su - "$ACTUAL_USER" -c "pip3 install --user --upgrade pillow requests python-nmap dnspython" || {
+    echo -e "${RED}[!] Failed to install Python dependencies${NC}"
+    exit 1
+}
 
-GO_TOOLS=(
-    "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
-    "github.com/projectdiscovery/httpx/cmd/httpx@latest"
-    "github.com/projectdiscovery/katana/cmd/katana@latest"
-    "github.com/tomnomnom/assetfinder@latest"
-)
+# Install Go-based tools
+echo -e "${YELLOW}[*] Installing reconnaissance tools...${NC}"
 
-for tool in "${GO_TOOLS[@]}"; do
-    echo "[+] go install $tool"
-    go install "$tool"
-done
+install_go_tool() {
+    local tool_name=$1
+    local tool_package=$2
+    
+    echo -e "${YELLOW}[*] Installing $tool_name...${NC}"
+    su - "$ACTUAL_USER" -c "source /etc/profile.d/golang.sh && go install $tool_package" || {
+        echo -e "${RED}[!] Failed to install $tool_name${NC}"
+        return 1
+    }
+    echo -e "${GREEN}[✓] $tool_name installed${NC}"
+}
 
-# -----------------------------------------------------------
-# 5. CREATE PYTHON VENV
-# -----------------------------------------------------------
-echo "[+] Creating Python virtual environment..."
+# Install tools as the actual user
+install_go_tool "subfinder" "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
+install_go_tool "amass" "github.com/owasp-amass/amass/v4/...@master"
+install_go_tool "assetfinder" "github.com/tomnomnom/assetfinder@latest"
+install_go_tool "httpx" "github.com/projectdiscovery/httpx/cmd/httpx@latest"
+install_go_tool "katana" "github.com/projectdiscovery/katana/cmd/katana@latest"
+install_go_tool "nuclei" "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
+install_go_tool "aquatone" "github.com/michenriksen/aquatone@latest"
 
-if [ ! -d "venv" ]; then
-    python3 -m venv venv
+# Update nuclei templates
+echo -e "${YELLOW}[*] Updating nuclei templates...${NC}"
+su - "$ACTUAL_USER" -c "source /etc/profile.d/golang.sh && nuclei -update-templates" 2>/dev/null || true
+
+# Make main script executable
+if [ -f "./recon_slytherins" ]; then
+    chmod +x ./recon_slytherins
+    chown "$ACTUAL_USER:$ACTUAL_USER" ./recon_slytherins
+    echo -e "${GREEN}[✓] Main script made executable${NC}"
 fi
 
-source venv/bin/activate
+# Create modules directory if it doesn't exist
+mkdir -p ./modules
+chown -R "$ACTUAL_USER:$ACTUAL_USER" ./modules
 
-echo "[+] Upgrading pip inside venv..."
-pip install --upgrade pip setuptools wheel >/dev/null
-
-# -----------------------------------------------------------
-# 6. INSTALL PYTHON DEPENDENCIES IN VENV
-# -----------------------------------------------------------
-echo "[+] Installing Python modules..."
-pip install pillow requests tqdm >/dev/null
-
-deactivate
-
-# -----------------------------------------------------------
-# 7. CREATE RUN ALIASES
-# -----------------------------------------------------------
-if ! grep -q "TSLYTHERINS" ~/.bashrc; then
-    echo "[+] Adding launcher alias to .bashrc"
-    echo "" >> ~/.bashrc
-    echo "# TSLYTHERINS" >> ~/.bashrc
-    echo "alias slytherins='./run_recon.sh'" >> ~/.bashrc
-fi
-
-# -----------------------------------------------------------
-# 8. FINISH
-# -----------------------------------------------------------
+echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║         Installation Complete!         ║${NC}"
+echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
 echo ""
-echo "=========================================="
-echo "  INSTALLATION COMPLETE ✔"
-echo "=========================================="
+echo -e "${YELLOW}[*] Next steps:${NC}"
+echo -e "    1. Run: ${GREEN}source /etc/profile.d/golang.sh${NC}"
+echo -e "    2. Verify: ${GREEN}subfinder -version${NC}"
+echo -e "    3. Execute: ${GREEN}./recon_slytherins${NC}"
 echo ""
-echo "Run the tool using:"
-echo "   ./run_recon.sh"
-echo ""
-echo "or simply:"
-echo "   slytherins"
+echo -e "${YELLOW}[*] Note: Logout and login again for PATH changes to take effect${NC}"
