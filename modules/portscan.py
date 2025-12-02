@@ -2,7 +2,6 @@
 
 """
 Port Scanning Module 
-Fixes: Better nmap integration, parsing, error handling
 """
 
 import sys
@@ -10,6 +9,7 @@ import subprocess
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
+import socket
 
 class PortScanner:
     def __init__(self, domain, output_dir):
@@ -20,13 +20,12 @@ class PortScanner:
     
     def resolve_domain(self):
         """Resolve domain to IP address"""
-        import socket
         try:
             ip = socket.gethostbyname(self.domain)
             print(f"[✓] Resolved {self.domain} to {ip}")
             return ip
-        except socket.gaierror:
-            print(f"[!] Could not resolve domain: {self.domain}")
+        except socket.gaierror as e:
+            print(f"[!] Could not resolve domain: {str(e)}", file=sys.stderr)
             return None
     
     def scan_ports(self, target):
@@ -37,11 +36,6 @@ class PortScanner:
         nmap_output = f"{self.ports_dir}/nmap.txt"
         nmap_xml = f"{self.ports_dir}/nmap.xml"
         
-        # Nmap command with safe defaults
-        # -sV: Version detection
-        # -T4: Faster timing
-        # --top-ports 1000: Scan top 1000 ports
-        # -oA: Output in all formats
         nmap_cmd = [
             'nmap',
             '-sV',
@@ -52,15 +46,13 @@ class PortScanner:
         ]
         
         try:
-            # Run nmap
             result = subprocess.run(
                 nmap_cmd,
                 capture_output=True,
                 text=True,
-                timeout=1800  # 30 minute timeout
+                timeout=1800
             )
             
-            # Save output
             with open(nmap_output, 'w') as f:
                 f.write(result.stdout)
                 if result.stderr:
@@ -71,14 +63,13 @@ class PortScanner:
                 print(f"[✓] Port scan completed")
                 return True
             else:
-                print(f"[!] Port scan completed with errors")
+                print(f"[!] Port scan completed with errors: {result.stderr}", file=sys.stderr)
                 return False
-                
         except subprocess.TimeoutExpired:
-            print("[!] Port scan timed out")
+            print("[!] Port scan timed out", file=sys.stderr)
             return False
         except Exception as e:
-            print(f"[!] Error during port scan: {str(e)}")
+            print(f"[!] Error during port scan: {str(e)}", file=sys.stderr)
             return False
     
     def parse_nmap_xml(self):
@@ -87,7 +78,7 @@ class PortScanner:
         summary_file = f"{self.ports_dir}/port_summary.txt"
         
         if not os.path.exists(xml_file):
-            print("[!] XML output not found, skipping parsing")
+            print("[!] XML output not found, skipping parsing", file=sys.stderr)
             return
         
         print("[*] Parsing scan results...")
@@ -100,19 +91,17 @@ class PortScanner:
                 f.write(f"PORT SCAN SUMMARY FOR: {self.domain}\n")
                 f.write("=" * 60 + "\n\n")
                 
-                # Find all hosts
                 for host in root.findall('host'):
-                    # Get host address
-                    address = host.find('address').get('addr')
-                    f.write(f"Host: {address}\n")
-                    f.write("-" * 60 + "\n\n")
+                    address = host.find('address')
+                    addr = address.get('addr') if address is not None else 'unknown'
                     
-                    # Get ports
-                    ports_elem = host.find('ports')
-                    if ports_elem is not None:
-                        open_ports = []
-                        
-                        for port in ports_elem.findall('port'):
+                    f.write(f"Host: {addr}\n")
+                    f.write("-" * 60 + "\n")
+                    
+                    open_ports = []
+                    ports = host.find('ports')
+                    if ports is not None:
+                        for port in ports.findall('port'):
                             state = port.find('state')
                             if state is not None and state.get('state') == 'open':
                                 portid = port.get('portid')
@@ -132,7 +121,6 @@ class PortScanner:
                                 }
                                 open_ports.append(port_info)
                         
-                        # Write open ports
                         if open_ports:
                             f.write(f"Open Ports: {len(open_ports)}\n\n")
                             f.write(f"{'PORT':<8} {'PROTOCOL':<10} {'SERVICE':<15} {'VERSION'}\n")
@@ -150,14 +138,14 @@ class PortScanner:
             
             print(f"[✓] Summary saved to: {summary_file}")
             
-        except ET.ParseError:
-            print("[!] Error parsing XML output")
+        except ET.ParseError as e:
+            print(f"[!] Error parsing XML: {str(e)}", file=sys.stderr)
         except Exception as e:
-            print(f"[!] Error creating summary: {str(e)}")
+            print(f"[!] Error creating summary: {str(e)}", file=sys.stderr)
 
 def main():
     if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <domain> <output_dir>")
+        print(f"Usage: {sys.argv[0]} <domain> <output_dir>", file=sys.stderr)
         sys.exit(1)
     
     domain = sys.argv[1]
@@ -167,25 +155,21 @@ def main():
     print(f"PORT SCANNING - {domain}")
     print("=" * 60)
     
-    # Check if nmap is installed
-    if subprocess.run(['which', 'nmap'], capture_output=True).returncode != 0:
-        print("[!] nmap is not installed")
-        print("[!] Install with: sudo apt install nmap")
+    if not which('nmap'):
+        print("[!] nmap is not installed", file=sys.stderr)
+        print("[!] Install with: sudo apt install nmap", file=sys.stderr)
         sys.exit(1)
     
     scanner = PortScanner(domain, output_dir)
     
-    # Resolve domain
     target = scanner.resolve_domain()
     if not target:
-        print("[!] Cannot proceed without valid target")
+        print("[!] Cannot proceed without valid target", file=sys.stderr)
         sys.exit(1)
     
-    # Scan ports
     success = scanner.scan_ports(target)
     
     if success:
-        # Parse results
         scanner.parse_nmap_xml()
     
     print("\n[✓] Port scanning complete!")
