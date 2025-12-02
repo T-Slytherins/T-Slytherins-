@@ -2,7 +2,6 @@
 
 """
 Subdomain Enumeration Module 
-Fixes: Better error handling, output management, tool verification
 """
 
 import sys
@@ -10,29 +9,28 @@ import subprocess
 import os
 from pathlib import Path
 
-def run_command(command, description):
-    """Run command and handle errors"""
+def run_command(cmd_list, description, timeout=600):
+    """Run command as list, handle errors"""
     print(f"[*] {description}...")
     try:
         result = subprocess.run(
-            command,
-            shell=True,
+            cmd_list,
             capture_output=True,
             text=True,
-            timeout=600  # 10 minute timeout
+            timeout=timeout
         )
         
         if result.returncode == 0:
             print(f"[✓] {description} completed")
             return result.stdout
         else:
-            print(f"[!] {description} failed: {result.stderr}")
+            print(f"[!] {description} failed: {result.stderr}", file=sys.stderr)
             return ""
     except subprocess.TimeoutExpired:
-        print(f"[!] {description} timed out")
+        print(f"[!] {description} timed out", file=sys.stderr)
         return ""
     except Exception as e:
-        print(f"[!] Error in {description}: {str(e)}")
+        print(f"[!] Error in {description}: {str(e)}", file=sys.stderr)
         return ""
 
 def deduplicate_subdomains(input_files, output_file):
@@ -44,11 +42,11 @@ def deduplicate_subdomains(input_files, output_file):
             try:
                 with open(file_path, 'r') as f:
                     for line in f:
-                        subdomain = line.strip()
+                        subdomain = line.strip().lower()
                         if subdomain and not subdomain.startswith('#'):
-                            subdomains.add(subdomain.lower())
+                            subdomains.add(subdomain)
             except Exception as e:
-                print(f"[!] Error reading {file_path}: {e}")
+                print(f"[!] Error reading {file_path}: {e}", file=sys.stderr)
     
     # Sort and save
     try:
@@ -59,12 +57,12 @@ def deduplicate_subdomains(input_files, output_file):
         print(f"[✓] Found {len(subdomains)} unique subdomains")
         return len(subdomains)
     except Exception as e:
-        print(f"[!] Error writing results: {e}")
+        print(f"[!] Error writing results: {e}", file=sys.stderr)
         return 0
 
 def main():
     if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <domain> <output_dir>")
+        print(f"Usage: {sys.argv[0]} <domain> <output_dir>", file=sys.stderr)
         sys.exit(1)
     
     domain = sys.argv[1]
@@ -74,20 +72,16 @@ def main():
     print(f"SUBDOMAIN ENUMERATION - {domain}")
     print("=" * 60)
     
-    # Verify tools exist
+    # Verify tools
     required_tools = ['amass', 'subfinder', 'assetfinder']
-    missing_tools = []
+    missing = [tool for tool in required_tools if not subprocess.run(['which', tool], capture_output=True).returncode == 0]
     
-    for tool in required_tools:
-        if subprocess.run(['which', tool], capture_output=True).returncode != 0:
-            missing_tools.append(tool)
-    
-    if missing_tools:
-        print(f"[!] Missing tools: {', '.join(missing_tools)}")
-        print("[!] Please run installer.sh")
+    if missing:
+        print(f"[!] Missing tools: {', '.join(missing)}", file=sys.stderr)
+        print("[!] Please run installer.sh", file=sys.stderr)
         sys.exit(1)
     
-    # Create temp directory for individual results
+    # Create temp directory
     temp_dir = f"{output_dir}/temp_subdomains"
     Path(temp_dir).mkdir(parents=True, exist_ok=True)
     
@@ -97,33 +91,23 @@ def main():
     assetfinder_output = f"{temp_dir}/assetfinder.txt"
     final_output = f"{output_dir}/all_subdomains.txt"
     
-    # Run Amass (passive mode)
-    amass_cmd = f"amass enum -passive -d {domain} -o {amass_output}"
-    run_command(amass_cmd, "Amass passive enumeration")
+    # Run tools with lists
+    run_command(["amass", "enum", "-passive", "-d", domain, "-o", amass_output], "Amass passive enumeration")
+    run_command(["subfinder", "-d", domain, "-silent", "-o", subfinder_output], "Subfinder enumeration")
+    run_command(["assetfinder", "--subs-only", domain], "Assetfinder enumeration")  # Redirect output separately
+    with open(assetfinder_output, 'w') as f:
+        f.write(run_command(["assetfinder", "--subs-only", domain], "Assetfinder enumeration"))
     
-    # Run Subfinder
-    subfinder_cmd = f"subfinder -d {domain} -silent -o {subfinder_output}"
-    run_command(subfinder_cmd, "Subfinder enumeration")
-    
-    # Run Assetfinder
-    assetfinder_cmd = f"assetfinder --subs-only {domain} > {assetfinder_output}"
-    run_command(assetfinder_cmd, "Assetfinder enumeration")
-    
-    # Combine and deduplicate
+    # Combine
     print("\n[*] Combining and deduplicating results...")
-    total = deduplicate_subdomains(
-        [amass_output, subfinder_output, assetfinder_output],
-        final_output
-    )
+    total = deduplicate_subdomains([amass_output, subfinder_output, assetfinder_output], final_output)
     
-    # Cleanup temp files
-    try:
-        for file in [amass_output, subfinder_output, assetfinder_output]:
-            if os.path.exists(file):
-                os.remove(file)
+    # Cleanup
+    for file in [amass_output, subfinder_output, assetfinder_output]:
+        if os.path.exists(file):
+            os.remove(file)
+    if os.path.exists(temp_dir):
         os.rmdir(temp_dir)
-    except:
-        pass
     
     print(f"\n[✓] Results saved to: {final_output}")
     print(f"[✓] Total unique subdomains: {total}")
