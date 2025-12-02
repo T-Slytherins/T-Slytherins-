@@ -11,7 +11,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║          T-SLYTHERINS Installer         ║${NC}"
+echo -e "${GREEN}║           T-SLYTHERINS Installer       ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
 
 # Check if running as root
@@ -149,7 +149,31 @@ install_go_tool "assetfinder" "github.com/tomnomnom/assetfinder@latest"
 install_go_tool "httpx" "github.com/projectdiscovery/httpx/cmd/httpx@latest"
 install_go_tool "katana" "github.com/projectdiscovery/katana/cmd/katana@latest"
 install_go_tool "nuclei" "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
-install_go_tool "aquatone" "github.com/michenriksen/aquatone@latest"
+# Install aquatone (use binary if go install fails)
+echo -e "${YELLOW}[*] Installing aquatone...${NC}"
+if ! su - "$ACTUAL_USER" -c "source /etc/profile.d/golang.sh && go install github.com/michenriksen/aquatone@latest" 2>/dev/null; then
+    echo -e "${YELLOW}[!] Go install failed, trying binary download...${NC}"
+    
+    # Download pre-built binary
+    AQUATONE_VERSION="1.7.0"
+    TEMP_DIR=$(mktemp -d)
+    
+    if wget -q "https://github.com/michenriksen/aquatone/releases/download/v${AQUATONE_VERSION}/aquatone_linux_amd64_${AQUATONE_VERSION}.zip" -O "$TEMP_DIR/aquatone.zip"; then
+        cd "$TEMP_DIR"
+        unzip -q aquatone.zip 2>/dev/null
+        mkdir -p "$ACTUAL_HOME/go/bin"
+        cp aquatone "$ACTUAL_HOME/go/bin/"
+        chmod +x "$ACTUAL_HOME/go/bin/aquatone"
+        chown "$ACTUAL_USER:$ACTUAL_USER" "$ACTUAL_HOME/go/bin/aquatone"
+        cd - > /dev/null
+        rm -rf "$TEMP_DIR"
+        echo -e "${GREEN}[✓] aquatone installed from binary${NC}"
+    else
+        echo -e "${YELLOW}[!] aquatone installation failed (optional tool)${NC}"
+    fi
+else
+    echo -e "${GREEN}[✓] aquatone installed${NC}"
+fi
 
 # Update nuclei templates
 echo -e "${YELLOW}[*] Updating nuclei templates...${NC}"
@@ -167,7 +191,7 @@ mkdir -p ./modules
 chown -R "$ACTUAL_USER:$ACTUAL_USER" ./modules
 
 echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║     Installation Complete!             ║${NC}"
+echo -e "${GREEN}║          Installation Complete!        ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "${CYAN}[*] Go tools installed successfully${NC}"
