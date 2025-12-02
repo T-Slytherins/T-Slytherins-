@@ -89,11 +89,12 @@ sudo ./installer.sh
 ```
 # 3. Setup Python virtual environment
 ```bash
+chmod +x install_with_venv.sh
 ./install_with_venv.sh
 ```
 # 4. Verify installation
 ```bash
-./run_recon.sh --test
+./run_recon.sh
 ```
 🎯 Installation Verification
 # Check all tools
