@@ -2,54 +2,38 @@ import os
 import subprocess
 from pathlib import Path
 
-def _choose_terminal_commands(bash_cmd, title=None):
-    """
-    Return a list of candidate terminal invocations (each is a list)
-    that run bash -lc "<bash_cmd>" and keep the window open.
-    """
-    t = title or "T-SLYTHERINS"
-    # the command will run: clear; echo title; then the command; tee logfile; create done file; prompt to close
-    return [
-        ["xfce4-terminal", "--hold", "-e", f"bash -lc \"{bash_cmd}\""],
-        ["xterm", "-hold", "-e", "bash", "-lc", bash_cmd],
-        ["gnome-terminal", "--", "bash", "-lc", bash_cmd],
-        ["konsole", "-e", "bash", "-lc", bash_cmd],
-    ]
-
-def launch_module_in_terminal(module_cmd: str, logfile: str, donefile: str, title: str = None):
-    """
-    Launch module_cmd (a bash string) in a GUI terminal, pipe stdout/stderr to logfile,
-    and create donefile when finished. This returns the Popen object or None.
-    """
-    # ensure directories
+def launch_module_in_terminal(module_cmd: list, logfile: str, donefile: str, title: str = None):
+    """Launch module_cmd (list) in GUI terminal, log output, create donefile"""
+    # Ensure dirs
     os.makedirs(os.path.dirname(logfile) or ".", exist_ok=True)
-    # Compose the wrapper bash command so the terminal displays output and writes donefile at the end.
-    # It will also pause at the end waiting for a keypress so you can inspect it.
-    safe_cmd = (
-        f"clear; echo '--- {title or 'T-SLYTHERINS'} ---'; "
-        f"{module_cmd} 2>&1 | tee -a {logfile}; "
-        f"echo; echo '--- DONE: {title or ''} ---' ; echo DONE > {donefile}; "
-        f"read -n1 -s -r -p 'Press any key to close this window...'"
-    )
-    candidates = _choose_terminal_commands(safe_cmd, title)
+    
+    # Wrapper to run command, log, create donefile
+    wrapper_cmd = ' '.join([shlex.quote(arg) for arg in module_cmd]) + f" 2>&1 | tee -a {shlex.quote(logfile)}; echo DONE > {shlex.quote(donefile)}; read -n1 -s -r -p 'Press any key to close...'"
+    
+    candidates = [
+        ["xfce4-terminal", "--hold", "-e", "bash", "-lc", wrapper_cmd],
+        ["xterm", "-hold", "-e", "bash", "-lc", wrapper_cmd],
+        ["gnome-terminal", "--", "bash", "-lc", wrapper_cmd],
+        ["konsole", "-e", "bash", "-lc", wrapper_cmd],
+    ]
+    
     for cmd in candidates:
         try:
             p = subprocess.Popen(cmd)
             return p
         except FileNotFoundError:
             continue
-    # if no GUI terminal exists, fallback: run in background without terminal and still create donefile when done
-    # create a background shell that runs the command
+    
+    # Fallback: background run
     try:
-        bg_cmd = f"bash -lc \"{module_cmd} 2>&1 | tee -a {logfile}; echo DONE > {donefile}\""
-        return subprocess.Popen(["bash", "-lc", bg_cmd])
-    except Exception:
+        bg_cmd = f"bash -lc '{wrapper_cmd}' &"
+        return subprocess.Popen(bg_cmd, shell=True)
+    except Exception as e:
+        print(f"[!] Failed to launch: {str(e)}", file=sys.stderr)
         return None
 
 def wait_for_done(donefile: str, poll_interval: float = 1.0, timeout: int = None):
-    """
-    Wait for donefile to appear. Returns True if seen, False if timed out.
-    """
+    """Wait for donefile"""
     import time
     start = time.time()
     while True:
