@@ -1,241 +1,151 @@
 #!/usr/bin/env python3
-
-"""
-Vulnerability Scanning Module 
-"""
-
-import sys
-import subprocess
-import os
-import json
+import sys, subprocess, os, json
 from pathlib import Path
 from shutil import which
 
 class VulnerabilityScanner:
-    def __init__(self, domain, output_dir):
+    def __init__(self, domain, out_dir):
         self.domain = domain
-        self.output_dir = output_dir
-        self.nuclei_dir = f"{output_dir}/nuclei"
-        Path(self.nuclei_dir).mkdir(parents=True, exist_ok=True)
+        self.out_dir = out_dir
+        self.nuc_dir = f"{out_dir}/nuclei"
+        Path(self.nuc_dir).mkdir(parents=True, exist_ok=True)
     
     def check_httpx_results(self):
-        """Check if httpx results exist, prepare if needed"""
-        httpx_file = f"{self.output_dir}/httpx_results.txt"
-        
-        if os.path.exists(httpx_file):
-            print(f"[✓] Found httpx results: {httpx_file}")
-            return httpx_file
-        
-        subdomain_file = f"{self.output_dir}/all_subdomains.txt"
-        if os.path.exists(subdomain_file):
-            print(f"[*] Running httpx on subdomains...")
-            return self.run_httpx(subdomain_file)
-        
-        print(f"[!] No target file found", file=sys.stderr)
+        httpx_f = f"{self.out_dir}/httpx_results.txt"
+        if os.path.exists(httpx_f):
+            print(f"[✓] httpx: {httpx_f}")
+            return httpx_f
+        sub_f = f"{self.out_dir}/all_subdomains.txt"
+        if os.path.exists(sub_f):
+            print("[*] httpx on subs...")
+            return self.run_httpx(sub_f)
+        print("[!] No target", file=sys.stderr)
         return None
     
-    def run_httpx(self, input_file):
-        """Run httpx to find live hosts"""
-        prepared_file = self.prepare_urls(input_file)
-        if not prepared_file:
+    def run_httpx(self, in_f):
+        prep_f = self.prepare_urls(in_f)
+        if not prep_f:
             return None
-        
-        print("[*] Running httpx to find live hosts...")
-        
-        httpx_output = f"{self.output_dir}/httpx_results.txt"
-        
-        httpx_cmd = [
-            'httpx',
-            '-l', prepared_file,
-            '-silent',
-            '-o', httpx_output,
-            '-timeout', '10',
-            '-retries', '2'
-        ]
-        
+        httpx_out = f"{self.out_dir}/httpx_results.txt"
+        cmd = ['httpx', '-l', prep_f, '-silent', '-o', httpx_out, '-timeout', '10', '-retries', '2']
         try:
-            subprocess.run(httpx_cmd, timeout=600, check=True)
-            if os.path.exists(httpx_output):
-                with open(httpx_output, 'r') as f:
-                    count = sum(1 for line in f if line.strip())
-                print(f"[✓] Found {count} live hosts")
-                return httpx_output
+            subprocess.run(cmd, timeout=600, check=True)
+            if os.path.exists(httpx_out):
+                with open(httpx_out, 'r') as f:
+                    count = sum(1 for l in f if l.strip())
+                print(f"[✓] {count} live")
+                return httpx_out
             return None
         except Exception as e:
-            print(f"[!] Error running httpx: {str(e)}", file=sys.stderr)
+            print(f"[!] httpx err: {str(e)}", file=sys.stderr)
             return None
     
-    def prepare_urls(self, input_file):
-        """Prepare URLs with protocols"""
-        output_file = f"{self.output_dir}/prepared_for_vuln.txt"
-        
+    def prepare_urls(self, in_f):
+        out_f = f"{self.out_dir}/prepared_for_vuln.txt"
         try:
-            with open(input_file, 'r') as infile, open(output_file, 'w') as outfile:
-                for line in infile:
+            with open(in_f, 'r') as inf, open(out_f, 'w') as outf:
+                for line in inf:
                     url = line.strip()
                     if url and not url.startswith('#'):
                         if not url.startswith(('http://', 'https://')):
-                            outfile.write(f"https://{url}\n")
+                            outf.write(f"https://{url}\n")
                         else:
-                            outfile.write(f"{url}\n")
-            return output_file
+                            outf.write(f"{url}\n")
+            return out_f
         except Exception as e:
-            print(f"[!] Error preparing URLs: {str(e)}", file=sys.stderr)
+            print(f"[!] Prep err: {str(e)}", file=sys.stderr)
             return None
     
     def update_templates(self):
-        """Update nuclei templates"""
-        print("[*] Updating nuclei templates...")
-        
+        print("[*] Updating templates...")
         try:
             subprocess.run(['nuclei', '-update-templates'], capture_output=True, timeout=300, check=True)
-            print("[✓] Templates updated")
+            print("[✓] Updated")
         except Exception as e:
-            print(f"[!] Could not update templates: {str(e)}. Continuing...", file=sys.stderr)
+            print(f"[!] Update err: {str(e)}", file=sys.stderr)
     
-    def run_nuclei(self, target_file):
-        """Run nuclei vulnerability scan"""
-        print("[*] Starting vulnerability scan with nuclei...")
-        print("[*] This may take a while...")
-        
-        nuclei_output = f"{self.nuclei_dir}/nuclei.log"
-        nuclei_json = f"{self.nuclei_dir}/nuclei.json"
-        
-        nuclei_cmd = [
-            'nuclei',
-            '-l', target_file,
-            '-o', nuclei_output,
-            '-jsonl', nuclei_json,
-            '-severity', 'critical,high,medium',
-            '-rate-limit', '50',
-            '-concurrency', '10',
-            '-bulk-size', '25',
-            '-timeout', '10',
-            '-retries', '2',
-            '-silent'
-        ]
-        
+    def run_nuclei(self, tgt_f):
+        print("[*] Scanning...")
+        nuc_out = f"{self.nuc_dir}/nuclei.log"
+        nuc_json = f"{self.nuc_dir}/nuclei.json"
+        cmd = ['nuclei', '-l', tgt_f, '-o', nuc_out, '-jsonl', nuc_json, '-severity', 'critical,high,medium', '-rate-limit', '50', '-concurrency', '10', '-bulk-size', '25', '-timeout', '10', '-retries', '2', '-silent', '-t', 'templates/']
         try:
-            result = subprocess.run(
-                nuclei_cmd,
-                capture_output=True,
-                text=True,
-                timeout=3600
-            )
-            
-            if result.returncode == 0:
-                print(f"[✓] Nuclei scan completed")
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            if res.returncode == 0:
+                print("[✓] Completed")
                 return True
-            else:
-                print(f"[!] Nuclei scan failed: {result.stderr}", file=sys.stderr)
-                return False
+            print(f"[!] Fail: {res.stderr}", file=sys.stderr)
+            return False
         except subprocess.TimeoutExpired:
-            print("[!] Nuclei scan timed out", file=sys.stderr)
+            print("[!] Timeout", file=sys.stderr)
             return False
         except Exception as e:
-            print(f"[!] Error running nuclei: {str(e)}", file=sys.stderr)
+            print(f"[!] Err: {str(e)}", file=sys.stderr)
             return False
     
     def parse_results(self):
-        """Parse nuclei JSONL results"""
-        json_file = f"{self.nuclei_dir}/nuclei.json"
-        summary_file = f"{self.nuclei_dir}/summary.txt"
-        
-        if not os.path.exists(json_file):
-            print("[!] No JSON results found", file=sys.stderr)
+        json_f = f"{self.nuc_dir}/nuclei.json"
+        sum_f = f"{self.nuc_dir}/summary.txt"
+        if not os.path.exists(json_f):
+            print("[!] No JSON", file=sys.stderr)
             return
-        
-        print("[*] Parsing vulnerability results...")
-        
+        print("[*] Parsing...")
         try:
-            vulnerabilities = []
-            severity_counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'info': 0}
-            
-            with open(json_file, 'r') as f:
+            vulns = []
+            counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'info': 0}
+            with open(json_f, 'r') as f:
                 for line in f:
                     if line.strip():
-                        vuln = json.loads(line)
-                        vulnerabilities.append(vuln)
-                        severity = vuln.get('info', {}).get('severity', 'info').lower()
-                        severity_counts[severity] = severity_counts.get(severity, 0) + 1
-            
-            with open(summary_file, 'w') as f:
-                f.write(f"VULNERABILITY SCAN SUMMARY FOR: {self.domain}\n")
-                f.write("=" * 60 + "\n\n")
-                
-                f.write(f"Total Issues Found: {len(vulnerabilities)}\n")
-                f.write(f"  Critical: {severity_counts['critical']}\n")
-                f.write(f"  High:     {severity_counts['high']}\n")
-                f.write(f"  Medium:   {severity_counts['medium']}\n")
-                f.write(f"  Low:      {severity_counts['low']}\n")
-                f.write(f"  Info:     {severity_counts['info']}\n")
-                f.write("\n" + "=" * 60 + "\n\n")
-                
-                severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4}
-                vulnerabilities.sort(key=lambda x: severity_order.get(x.get('info', {}).get('severity', 'info').lower(), 5))
-                
-                f.write("DETAILED FINDINGS:\n\n")
-                
-                for vuln in vulnerabilities:
-                    info = vuln.get('info', {})
+                        v = json.loads(line)
+                        vulns.append(v)
+                        sev = v.get('info', {}).get('severity', 'info').lower()
+                        counts[sev] = counts.get(sev, 0) + 1
+            with open(sum_f, 'w') as f:
+                f.write(f"VULN SUMMARY FOR: {self.domain}\n{'='*60}\n\nTotal: {len(vulns)}\n")
+                for k, v in counts.items():
+                    f.write(f"  {k.capitalize()}: {v}\n")
+                f.write("\n{'='*60}\n\nDETAILS:\n\n")
+                order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4}
+                vulns.sort(key=lambda x: order.get(x.get('info', {}).get('severity', 'info').lower(), 5))
+                for v in vulns:
+                    info = v.get('info', {})
                     f.write(f"[{info.get('severity', 'UNKNOWN').upper()}] {info.get('name', 'Unknown')}\n")
-                    f.write(f"  Template: {vuln.get('template-id', 'unknown')}\n")
-                    f.write(f"  Target: {vuln.get('host', 'unknown')}\n")
-                    
-                    if 'matched-at' in vuln:
-                        f.write(f"  Matched: {vuln['matched-at']}\n")
-                    
+                    f.write(f"  Template: {v.get('template-id', 'unknown')}\n")
+                    f.write(f"  Target: {v.get('host', 'unknown')}\n")
+                    if 'matched-at' in v:
+                        f.write(f"  Matched: {v['matched-at']}\n")
                     if 'description' in info:
-                        f.write(f"  Description: {info['description']}\n")
-                    
+                        f.write(f"  Desc: {info['description']}\n")
                     f.write("\n")
-            
-            print(f"[✓] Summary saved to: {summary_file}")
-            print(f"[✓] Found {len(vulnerabilities)} issues")
-            
+            print(f"[✓] Saved: {sum_f}")
+            print(f"[✓] {len(vulns)} issues")
         except json.JSONDecodeError as e:
-            print(f"[!] Error parsing JSON: {str(e)}", file=sys.stderr)
+            print(f"[!] JSON err: {str(e)}", file=sys.stderr)
         except Exception as e:
-            print(f"[!] Error parsing results: {str(e)}", file=sys.stderr)
+            print(f"[!] Parse err: {str(e)}", file=sys.stderr)
 
 def main():
     if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <domain> <output_dir>", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} <domain> <out_dir>", file=sys.stderr)
         sys.exit(1)
-    
-    domain = sys.argv[1]
-    output_dir = sys.argv[2]
-    
-    print("=" * 60)
-    print(f"VULNERABILITY SCANNING - {domain}")
-    print("=" * 60)
-    
+    domain, out_dir = sys.argv[1], sys.argv[2]
+    print("="*60 + f"\nVULN SCAN - {domain}\n"+"="*60)
     if not which('nuclei'):
-        print("[!] nuclei is not installed", file=sys.stderr)
-        print("[!] Please run installer.sh", file=sys.stderr)
+        print("[!] No nuclei", file=sys.stderr)
         sys.exit(1)
-    
-    scanner = VulnerabilityScanner(domain, output_dir)
-    
+    scanner = VulnerabilityScanner(domain, out_dir)
     scanner.update_templates()
     print()
-    
-    target_file = scanner.check_httpx_results()
-    if not target_file:
-        print("[!] No targets available for scanning", file=sys.stderr)
+    tgt_f = scanner.check_httpx_results()
+    if not tgt_f:
         sys.exit(1)
-    
     print()
-    
-    success = scanner.run_nuclei(target_file)
-    
+    success = scanner.run_nuclei(tgt_f)
     if success:
         print()
         scanner.parse_results()
-    
-    print("\n[✓] Vulnerability scanning complete!")
-    print(f"[*] Results saved to: {scanner.nuclei_dir}")
-    print("=" * 60)
+    print("\n[✓] Complete!")
+    print(f"[*] Saved: {scanner.nuc_dir}\n"+"="*60)
 
 if __name__ == "__main__":
     main()
