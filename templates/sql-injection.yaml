@@ -1,0 +1,20 @@
+id: sql-injection-time
+
+info:
+  name: Time-Based SQL Injection
+  author: custom-adapter
+  severity: high
+  description: Detects time-based SQL injection by injecting sleep payloads and measuring response time.
+  tags: sqli,time-based
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}?id=1' AND SLEEP(5)--"
+    matchers-condition: and
+    matchers:
+      - type: time
+        delay: 5
+      - type: status
+        status:
+          - 200
