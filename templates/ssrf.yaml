@@ -1,0 +1,24 @@
+id: ssrf
+
+info:
+  name: Server-Side Request Forgery
+  author: custom-adapter
+  severity: high
+  description: Detects SSRF by requesting internal metadata endpoints.
+  tags: ssrf
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://169.254.169.254/latest/meta-data/"
+    matchers-condition: and
+    matchers:
+      - type: word
+        words:
+          - "ami-id"
+          - "instance-id"
+        condition: or
+        part: body
+      - type: status
+        status:
+          - 200
