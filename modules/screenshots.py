@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Screenshot Module (Fixed)
-Fixes: Better error handling, fallback options, thumbnail generation
+Screenshot Module
 """
 
 import sys
@@ -10,6 +9,7 @@ import subprocess
 import os
 from pathlib import Path
 from PIL import Image
+from shutil import which
 
 class ScreenshotTaker:
     def __init__(self, domain, output_dir):
@@ -19,158 +19,102 @@ class ScreenshotTaker:
         self.screenshots_dir = f"{self.aquatone_dir}/screenshots"
         self.thumbs_dir = f"{self.aquatone_dir}/thumbs"
         
-        # Create directories
         Path(self.screenshots_dir).mkdir(parents=True, exist_ok=True)
         Path(self.thumbs_dir).mkdir(parents=True, exist_ok=True)
     
     def check_tools(self):
         """Check if required tools are installed"""
-        if subprocess.run(['which', 'aquatone'], capture_output=True).returncode != 0:
-            print("[!] aquatone is not installed")
+        if not which('aquatone'):
+            print("[!] aquatone is not installed", file=sys.stderr)
             return False
         return True
     
     def get_target_file(self):
         """Find the target file for screenshots"""
-        # Check for httpx results first
         httpx_file = f"{self.output_dir}/httpx_results.txt"
         if os.path.exists(httpx_file):
             print(f"[✓] Using httpx results: {httpx_file}")
             return httpx_file
         
-        # Fall back to subdomains
         subdomain_file = f"{self.output_dir}/all_subdomains.txt"
         if os.path.exists(subdomain_file):
             print(f"[*] Using subdomain file: {subdomain_file}")
-            # Add http:// prefix for aquatone
             return self.prepare_urls(subdomain_file)
         
-        print("[!] No target file found")
+        print(f"[!] No target file found", file=sys.stderr)
         return None
     
     def prepare_urls(self, input_file):
-        """Prepare URLs with http/https prefix"""
+        """Prepare URLs with http/https prefix, filter invalid"""
         output_file = f"{self.output_dir}/urls_for_screenshots.txt"
         
         try:
             with open(input_file, 'r') as infile, open(output_file, 'w') as outfile:
                 for line in infile:
                     url = line.strip()
-                    if url and not url.startswith('#'):
-                        # Add protocol if missing
+                    if url and not url.startswith('#') and '.' in url:  # Basic filter
                         if not url.startswith(('http://', 'https://')):
                             outfile.write(f"https://{url}\n")
                             outfile.write(f"http://{url}\n")
                         else:
                             outfile.write(f"{url}\n")
-            
             print(f"[✓] Prepared URLs: {output_file}")
             return output_file
-            
         except Exception as e:
-            print(f"[!] Error preparing URLs: {str(e)}")
+            print(f"[!] Error preparing URLs: {str(e)}", file=sys.stderr)
             return None
     
     def run_aquatone(self, target_file):
-        """Run aquatone to capture screenshots"""
+        """Run aquatone using Popen for pipe"""
         print("[*] Starting screenshot capture with aquatone...")
-        print("[*] This may take a while depending on number of targets...")
-        
-        aquatone_cmd = f"cat {target_file} | aquatone -out {self.aquatone_dir}"
+        print("[*] This may take a while...")
         
         try:
-            process = subprocess.Popen(
-                aquatone_cmd,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True
-            )
-            
-            # Stream output
-            for line in process.stdout:
-                print(f"  {line.strip()}")
-            
-            process.wait(timeout=1800)  # 30 minute timeout
-            
-            if process.returncode == 0:
-                print("[✓] Screenshot capture completed")
-                return True
-            else:
-                print("[!] Screenshot capture completed with warnings")
-                return True  # Still consider successful
-                
-        except subprocess.TimeoutExpired:
-            print("[!] Screenshot capture timed out")
-            process.kill()
-            return False
-        except KeyboardInterrupt:
-            print("\n[!] Capture interrupted by user")
-            process.kill()
-            return False
+            with open(target_file, 'r') as input_f:
+                proc = subprocess.Popen(["aquatone", "-out", self.aquatone_dir], stdin=input_f, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                output, _ = proc.communicate()
+                if proc.returncode == 0:
+                    print(f"[✓] aquatone completed: {output.decode()}")
+                    return True
+                else:
+                    print(f"[!] aquatone failed", file=sys.stderr)
+                    return False
         except Exception as e:
-            print(f"[!] Error during screenshot capture: {str(e)}")
+            print(f"[!] Error running aquatone: {str(e)}", file=sys.stderr)
             return False
     
     def generate_thumbnails(self):
-        """Generate thumbnails from screenshots"""
+        """Generate thumbnails for screenshots"""
         print("[*] Generating thumbnails...")
         
-        # Look for screenshots in aquatone output
-        screenshot_sources = [
-            f"{self.aquatone_dir}/screenshots",
-            self.aquatone_dir
-        ]
+        thumbnail_size = (400, 300)
+        thumb_count = 0
+        fail_count = 0
         
-        screenshot_files = []
-        for source_dir in screenshot_sources:
-            if os.path.exists(source_dir):
-                for file in os.listdir(source_dir):
-                    if file.endswith('.png'):
-                        screenshot_files.append(os.path.join(source_dir, file))
+        for screenshot_file in os.listdir(self.screenshots_dir):
+            if screenshot_file.endswith(('.png', '.jpg')):
+                try:
+                    img_path = os.path.join(self.screenshots_dir, screenshot_file)
+                    img = Image.open(img_path)
+                    img.thumbnail(thumbnail_size)
+                    thumb_path = os.path.join(self.thumbs_dir, f"thumb_{screenshot_file}")
+                    img.save(thumb_path)
+                    thumb_count += 1
+                except Exception as e:
+                    print(f"[!] Error thumbnail {screenshot_file}: {str(e)}", file=sys.stderr)
+                    fail_count += 1
         
-        if not screenshot_files:
-            print("[!] No screenshots found to process")
-            return
-        
-        print(f"[*] Processing {len(screenshot_files)} screenshots...")
-        
-        thumbnail_count = 0
-        for screenshot_path in screenshot_files:
-            try:
-                # Open image
-                img = Image.open(screenshot_path)
-                
-                # Create thumbnail (max 400x300)
-                img.thumbnail((400, 300), Image.Resampling.LANCZOS)
-                
-                # Save thumbnail
-                filename = os.path.basename(screenshot_path)
-                thumb_path = os.path.join(self.thumbs_dir, f"thumb_{filename}")
-                img.save(thumb_path, 'PNG', optimize=True)
-                
-                thumbnail_count += 1
-                
-            except Exception as e:
-                print(f"[!] Error processing {screenshot_path}: {str(e)}")
-                continue
-        
-        print(f"[✓] Generated {thumbnail_count} thumbnails")
+        print(f"[✓] Generated {thumb_count} thumbnails ({fail_count} failures)")
         print(f"[✓] Thumbnails saved to: {self.thumbs_dir}")
     
     def create_gallery_html(self):
         """Create a simple HTML gallery of screenshots"""
         html_file = f"{self.aquatone_dir}/gallery.html"
         
-        # Get all thumbnails
-        thumbs = []
-        if os.path.exists(self.thumbs_dir):
-            for file in sorted(os.listdir(self.thumbs_dir)):
-                if file.endswith('.png'):
-                    thumbs.append(file)
+        thumbs = [file for file in os.listdir(self.thumbs_dir) if file.endswith('.png')]
         
         if not thumbs:
-            print("[!] No thumbnails found for gallery")
+            print("[!] No thumbnails found for gallery", file=sys.stderr)
             return
         
         try:
@@ -196,7 +140,6 @@ class ScreenshotTaker:
 """)
                 
                 for thumb in thumbs:
-                    # Get original screenshot name
                     original = thumb.replace('thumb_', '')
                     f.write(f"""
             <div class="item">
@@ -215,11 +158,11 @@ class ScreenshotTaker:
             print(f"[✓] Gallery created: {html_file}")
             
         except Exception as e:
-            print(f"[!] Error creating gallery: {str(e)}")
+            print(f"[!] Error creating gallery: {str(e)}", file=sys.stderr)
 
 def main():
     if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <domain> <output_dir>")
+        print(f"Usage: {sys.argv[0]} <domain> <output_dir>", file=sys.stderr)
         sys.exit(1)
     
     domain = sys.argv[1]
@@ -231,20 +174,17 @@ def main():
     
     taker = ScreenshotTaker(domain, output_dir)
     
-    # Check tools
     if not taker.check_tools():
-        print("[!] Please run installer.sh")
+        print("[!] Please run installer.sh", file=sys.stderr)
         sys.exit(1)
     
-    # Get target file
     target_file = taker.get_target_file()
     if not target_file:
-        print("[!] No targets available for screenshots")
+        print("[!] No targets available for screenshots", file=sys.stderr)
         sys.exit(1)
     
     print()
     
-    # Run aquatone
     success = taker.run_aquatone(target_file)
     
     if success:
