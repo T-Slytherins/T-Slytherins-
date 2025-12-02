@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-
 """
-T-SLYTHERINS Main Script
+T-SLYTHERINS Main Reconnaissance Script
 """
 
 import sys
@@ -11,19 +10,22 @@ import threading
 import subprocess
 import shlex
 from pathlib import Path
+from shutil import which
 
-# Add the current directory to the Python path to allow module imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add modules directory to Python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'modules'))
 
 try:
-    from modules.progress import Spinner
-    from modules import utils
+    from progress import Spinner
+    import utils
 except ImportError as e:
     print(f"[!] Import error: {e}", file=sys.stderr)
-    print("[!] Make sure you are running from the correct directory and that modules/ exists.", file=sys.stderr)
+    print("[!] Make sure modules/ directory exists and has required files", file=sys.stderr)
     sys.exit(1)
 
-banner = r"""
+def print_banner():
+    """Print the tool banner"""
+    banner = """
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                                                      ║
 ║               _______      _______          __   __ _______ _     _ _______  ______ _____ __   _ _______             ║
@@ -35,48 +37,167 @@ banner = r"""
 ║           Advanced Automated Reconnaissance Framework ~ Owned by T-Slytherins ~ Crafted by Pr0fessor_SnApe           ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
 """
+    print(banner)
 
-print(banner)
+def check_tools():
+    """Check if required tools are installed"""
+    required_tools = [
+        ('subfinder', 'Subfinder is not installed. Run installer.sh'),
+        ('amass', 'Amass is not installed. Run installer.sh'),
+        ('httpx', 'HTTPX is not installed. Run installer.sh'),
+        ('nuclei', 'Nuclei is not installed. Run installer.sh'),
+        ('nmap', 'Nmap is not installed. Install with: sudo apt install nmap'),
+        ('katana', 'Katana is not installed. Run installer.sh'),
+    ]
+    
+    print("[*] Checking required tools...")
+    missing_tools = []
+    
+    for tool, message in required_tools:
+        if not which(tool):
+            print(f"  [!] {tool}: {message}")
+            missing_tools.append(tool)
+        else:
+            print(f"  [✓] {tool}")
+    
+    if missing_tools:
+        print(f"\n[!] Missing tools: {', '.join(missing_tools)}")
+        return False
+    return True
+
+def run_module(module_name, domain, output_dir):
+    """Run a module and track its progress"""
+    log_file = f"{output_dir}/{module_name}.log"
+    done_file = f"{output_dir}/{module_name}.done"
+    
+    module_map = {
+        'subdomains': 'python3 modules/subdomains.py',
+        'dns': 'python3 modules/dnsscan.py',
+        'httprobe': 'python3 modules/httprobe.py',
+        'portscan': 'python3 modules/portscan.py',
+        'vulnscan': 'python3 modules/vulnscan.py',
+        'crawl': 'python3 modules/crawl.py',
+        'screenshots': 'python3 modules/screenshots.py'
+    }
+    
+    if module_name not in module_map:
+        print(f"[!] Unknown module: {module_name}", file=sys.stderr)
+        return None
+    
+    cmd = f"{module_map[module_name]} {domain} {output_dir}"
+    cmd_list = shlex.split(cmd)
+    
+    try:
+        process = utils.launch_module_in_terminal(cmd_list, log_file, done_file, f"{module_name} - {domain}")
+        return process
+    except Exception as e:
+        print(f"[!] Failed to start {module_name}: {e}", file=sys.stderr)
+        return None
 
 def main():
+    print_banner()
+    
+    # Check if running in venv
+    if not hasattr(sys, 'real_prefix') and 'VIRTUAL_ENV' not in os.environ:
+        print("[!] WARNING: Not running in virtual environment")
+        print("[*] Recommended: source venv/bin/activate")
+    
     # Get target domain
     if len(sys.argv) > 1:
         domain = sys.argv[1]
     else:
         domain = input("[?] Enter target domain: ").strip()
-
+    
     if not domain:
         print("[!] No domain provided", file=sys.stderr)
         sys.exit(1)
-
+    
+    # Check tools
+    if not check_tools():
+        print("\n[!] Please install missing tools and try again")
+        sys.exit(1)
+    
     # Create output directory
     output_dir = f"T-SLYTHERINS-OUTPUT-{domain}"
     Path(output_dir).mkdir(exist_ok=True)
-
+    
+    print(f"\n[*] Target: {domain}")
     print(f"[*] Output directory: {output_dir}")
-
+    print("-" * 60)
+    
     # Initialize spinner
     spinner = Spinner()
-    spinner.set_module_running("Subdomain Enumeration", True)
-    spinner.set_module_running("DNS Reconnaissance", True)
-    spinner.set_module_running("Port Scanning", True)
-    spinner.set_module_running("Vulnerability Scanning", True)
-    spinner.set_module_running("Screenshot Capture", True)
-
-    spinner.start()
-
-    # Simulate some work
-    time.sleep(5)
-
-    spinner.set_module_running("Subdomain Enumeration", False)
-    spinner.set_module_running("DNS Reconnaissance", False)
-    spinner.set_module_running("Port Scanning", False)
-    spinner.set_module_running("Vulnerability Scanning", False)
-    spinner.set_module_running("Screenshot Capture", False)
-
-    spinner.stop()
-
-    print("[✓] All modules completed.")
+    
+    # Define modules and their display names
+    modules = [
+        ('subdomains', 'Subdomain Enumeration'),
+        ('dns', 'DNS Reconnaissance'),
+        ('httprobe', 'HTTP Probing'),
+        ('portscan', 'Port Scanning'),
+        ('vulnscan', 'Vulnerability Scan'),
+        ('crawl', 'Web Crawling'),
+        ('screenshots', 'Screenshot Capture')
+    ]
+    
+    # Set initial state
+    for module_name, display_name in modules:
+        spinner.set_module_running(display_name, False)
+    
+    processes = []
+    
+    try:
+        # Start spinner
+        spinner.start()
+        
+        # Run modules sequentially (modify for parallel if needed)
+        for module_name, display_name in modules:
+            print(f"\n[*] Starting {display_name}...")
+            spinner.set_module_running(display_name, True)
+            
+            process = run_module(module_name, domain, output_dir)
+            if process:
+                processes.append((display_name, process))
+            
+            # Wait for module to complete
+            done_file = f"{output_dir}/{module_name}.done"
+            while not os.path.exists(done_file):
+                time.sleep(2)
+            
+            spinner.set_module_running(display_name, False)
+            print(f"[✓] {display_name} completed")
+        
+        # Stop spinner
+        spinner.stop()
+        
+        print("\n" + "=" * 60)
+        print("[✓] All modules completed!")
+        
+        # Generate report
+        print("[*] Generating HTML report...")
+        report_cmd = ["python3", "modules/report.py", output_dir]
+        subprocess.run(report_cmd, check=False)
+        
+        print(f"\n[✓] Reconnaissance complete!")
+        print(f"[*] Results saved to: {output_dir}/")
+        print(f"[*] Open report: firefox {output_dir}/report.html")
+        print("=" * 60)
+        
+    except KeyboardInterrupt:
+        spinner.stop()
+        print("\n\n[!] Scan interrupted by user")
+        
+        # Kill any running processes
+        for display_name, process in processes:
+            if process and process.poll() is None:
+                process.terminate()
+                print(f"[*] Terminated {display_name}")
+        
+        sys.exit(1)
+    
+    except Exception as e:
+        spinner.stop()
+        print(f"\n[!] Error during scan: {e}", file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
