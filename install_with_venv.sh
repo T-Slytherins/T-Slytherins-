@@ -110,6 +110,21 @@ pip install --upgrade pip setuptools wheel
 echo -e "${GREEN}[✓] pip upgraded${NC}"
 echo ""
 
+# Check and install terminal emulator
+echo -e "${YELLOW}[*] Checking terminal emulator...${NC}"
+if ! which xfce4-terminal && ! which xterm && ! which gnome-terminal; then
+    echo -e "${YELLOW}[*] Installing xterm (terminal emulator)...${NC}"
+    if command_exists apt; then
+        sudo apt install -y xterm
+        echo -e "${GREEN}[✓] xterm installed${NC}"
+    else
+        echo -e "${RED}[!] Please install a terminal emulator manually${NC}"
+        echo -e "${YELLOW}[*] Command: sudo apt install xterm${NC}"
+    fi
+else
+    echo -e "${GREEN}[✓] Terminal emulator found${NC}"
+fi
+
 # Install Python dependencies
 echo -e "${YELLOW}[*] Step 5: Installing Python dependencies...${NC}"
 
@@ -122,6 +137,13 @@ pillow>=9.0.0
 requests>=2.28.0
 dnspython>=2.2.0
 python-nmap>=0.7.1
+
+# Python dependencies for T-SLYTHERINS
+Pillow>=9.0.0
+requests>=2.28.0
+dnspython>=2.2.0
+python-nmap>=0.7.1
+colorama>=0.4.6
 
 # Optional but recommended
 colorama>=0.4.6
