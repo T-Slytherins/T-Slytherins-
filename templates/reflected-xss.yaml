@@ -1,0 +1,22 @@
+id: reflected-xss
+
+info:
+  name: Reflected XSS Detection
+  author: custom-adapter
+  severity: medium
+  description: Detects reflected cross-site scripting vulnerabilities by injecting scripts and verifying execution.
+  tags: xss,reflected
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q={{randstr}}\"'><script>alert(1)</script>"
+    matchers-condition: and
+    matchers:
+      - type: word
+        words:
+          - "<script>alert(1)</script>"
+        part: body
+      - type: status
+        status:
+          - 200
