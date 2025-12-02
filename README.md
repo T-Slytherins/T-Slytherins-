@@ -1,11 +1,8 @@
  T-SLYTHERINS Reconnaissance Suite (Professional Edition)
  
 https://img.shields.io/badge/version-2.1.0-blue
-
 https://img.shields.io/badge/python-3.8%252B-green
-
 https://img.shields.io/badge/license-MIT-orange
-
 https://img.shields.io/badge/platform-Linux%2520%257C%2520Kali-brightgreen
 
 Advanced Automated Reconnaissance Framework for Security Professionals
