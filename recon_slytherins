@@ -9,23 +9,27 @@ import time
 import threading
 import subprocess
 import shlex
+import signal
 from pathlib import Path
 from shutil import which
 
 # Add modules directory to Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'modules'))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+modules_dir = os.path.join(current_dir, 'modules')
+sys.path.insert(0, modules_dir)
 
 try:
     from progress import Spinner
     import utils
 except ImportError as e:
     print(f"[!] Import error: {e}", file=sys.stderr)
-    print("[!] Make sure modules/ directory exists and has required files", file=sys.stderr)
+    print(f"[!] Current Python path: {sys.path}", file=sys.stderr)
+    print(f"[!] Looking for modules in: {modules_dir}", file=sys.stderr)
     sys.exit(1)
 
 def print_banner():
-    """Print the tool banner"""
-    banner = """
+    """Print the tool banner - Fixed escape sequences"""
+    banner = r"""
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                                                      ║
 ║               _______      _______          __   __ _______ _     _ _______  ______ _____ __   _ _______             ║
@@ -70,22 +74,25 @@ def run_module(module_name, domain, output_dir):
     log_file = f"{output_dir}/{module_name}.log"
     done_file = f"{output_dir}/{module_name}.done"
     
+    # Clean up old done file
+    if os.path.exists(done_file):
+        os.remove(done_file)
+    
     module_map = {
-        'subdomains': 'python3 modules/subdomains.py',
-        'dns': 'python3 modules/dnsscan.py',
-        'httprobe': 'python3 modules/httprobe.py',
-        'portscan': 'python3 modules/portscan.py',
-        'vulnscan': 'python3 modules/vulnscan.py',
-        'crawl': 'python3 modules/crawl.py',
-        'screenshots': 'python3 modules/screenshots.py'
+        'subdomains': ['python3', f'{modules_dir}/subdomains.py'],
+        'dns': ['python3', f'{modules_dir}/dnsscan.py'],
+        'httprobe': ['python3', f'{modules_dir}/httprobe.py'],
+        'portscan': ['python3', f'{modules_dir}/portscan.py'],
+        'vulnscan': ['python3', f'{modules_dir}/vulnscan.py'],
+        'crawl': ['python3', f'{modules_dir}/crawl.py'],
+        'screenshots': ['python3', f'{modules_dir}/screenshots.py']
     }
     
     if module_name not in module_map:
         print(f"[!] Unknown module: {module_name}", file=sys.stderr)
         return None
     
-    cmd = f"{module_map[module_name]} {domain} {output_dir}"
-    cmd_list = shlex.split(cmd)
+    cmd_list = module_map[module_name] + [domain, output_dir]
     
     try:
         process = utils.launch_module_in_terminal(cmd_list, log_file, done_file, f"{module_name} - {domain}")
@@ -94,19 +101,54 @@ def run_module(module_name, domain, output_dir):
         print(f"[!] Failed to start {module_name}: {e}", file=sys.stderr)
         return None
 
+def cleanup(processes, spinner):
+    """Cleanup function for graceful exit"""
+    if spinner:
+        spinner.stop()
+    
+    print("\n\n[!] Cleaning up...")
+    
+    # Kill any running processes
+    for display_name, process in processes:
+        if process and process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=5)
+                print(f"[*] Terminated {display_name}")
+            except:
+                try:
+                    process.kill()
+                except:
+                    pass
+    
+    print("[*] Cleanup complete")
+
 def main():
     print_banner()
     
     # Check if running in venv
-    if not hasattr(sys, 'real_prefix') and 'VIRTUAL_ENV' not in os.environ:
+    venv_active = hasattr(sys, 'real_prefix') or 'VIRTUAL_ENV' in os.environ
+    if not venv_active:
         print("[!] WARNING: Not running in virtual environment")
         print("[*] Recommended: source venv/bin/activate")
+        print("[*] Continue anyway? (y/N): ", end='')
+        response = input().strip().lower()
+        if response != 'y':
+            print("[*] Exiting. Please activate virtual environment.")
+            sys.exit(0)
     
-    # Get target domain
+    # Get target domain from command line or prompt
     if len(sys.argv) > 1:
         domain = sys.argv[1]
     else:
-        domain = input("[?] Enter target domain: ").strip()
+        try:
+            domain = input("[?] Enter target domain: ").strip()
+        except KeyboardInterrupt:
+            print("\n\n[!] Scan cancelled by user")
+            sys.exit(0)
+        except EOFError:
+            print("\n\n[!] No input received")
+            sys.exit(1)
     
     if not domain:
         print("[!] No domain provided", file=sys.stderr)
@@ -119,7 +161,11 @@ def main():
     
     # Create output directory
     output_dir = f"T-SLYTHERINS-OUTPUT-{domain}"
-    Path(output_dir).mkdir(exist_ok=True)
+    try:
+        Path(output_dir).mkdir(exist_ok=True)
+    except Exception as e:
+        print(f"[!] Failed to create output directory: {e}", file=sys.stderr)
+        sys.exit(1)
     
     print(f"\n[*] Target: {domain}")
     print(f"[*] Output directory: {output_dir}")
@@ -145,11 +191,19 @@ def main():
     
     processes = []
     
+    # Setup signal handler for graceful shutdown
+    def signal_handler(signum, frame):
+        cleanup(processes, spinner)
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     try:
         # Start spinner
         spinner.start()
         
-        # Run modules sequentially (modify for parallel if needed)
+        # Run modules
         for module_name, display_name in modules:
             print(f"\n[*] Starting {display_name}...")
             spinner.set_module_running(display_name, True)
@@ -160,8 +214,15 @@ def main():
             
             # Wait for module to complete
             done_file = f"{output_dir}/{module_name}.done"
-            while not os.path.exists(done_file):
+            max_wait = 7200  # 2 hours max per module
+            wait_time = 0
+            
+            while not os.path.exists(done_file) and wait_time < max_wait:
                 time.sleep(2)
+                wait_time += 2
+            
+            if wait_time >= max_wait:
+                print(f"[!] {display_name} timed out after 2 hours")
             
             spinner.set_module_running(display_name, False)
             print(f"[✓] {display_name} completed")
@@ -174,28 +235,28 @@ def main():
         
         # Generate report
         print("[*] Generating HTML report...")
-        report_cmd = ["python3", "modules/report.py", output_dir]
-        subprocess.run(report_cmd, check=False)
+        try:
+            report_cmd = ["python3", f"{modules_dir}/report.py", output_dir]
+            subprocess.run(report_cmd, check=False, timeout=300)
+            print("[✓] Report generated successfully")
+        except subprocess.TimeoutExpired:
+            print("[!] Report generation timed out")
+        except Exception as e:
+            print(f"[!] Error generating report: {e}")
         
         print(f"\n[✓] Reconnaissance complete!")
         print(f"[*] Results saved to: {output_dir}/")
-        print(f"[*] Open report: firefox {output_dir}/report.html")
+        print(f"[*] To view report: firefox {output_dir}/report.html")
+        print("[*] Or open in browser: file://" + os.path.abspath(f"{output_dir}/report.html"))
         print("=" * 60)
         
     except KeyboardInterrupt:
-        spinner.stop()
-        print("\n\n[!] Scan interrupted by user")
-        
-        # Kill any running processes
-        for display_name, process in processes:
-            if process and process.poll() is None:
-                process.terminate()
-                print(f"[*] Terminated {display_name}")
-        
+        cleanup(processes, spinner)
+        print("\n[!] Scan interrupted by user")
         sys.exit(1)
     
     except Exception as e:
-        spinner.stop()
+        cleanup(processes, spinner)
         print(f"\n[!] Error during scan: {e}", file=sys.stderr)
         sys.exit(1)
 
