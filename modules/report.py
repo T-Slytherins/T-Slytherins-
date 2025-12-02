@@ -2,7 +2,6 @@
 
 """
 Report Generation Module 
-Fixes: HTML escaping, chunked file reading, better parsing, removed JSON assumption
 """
 
 import sys
