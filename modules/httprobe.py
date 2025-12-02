@@ -2,13 +2,13 @@
 
 """
 HTTP Probing Module 
-Finds live HTTP/HTTPS hosts using httpx
 """
 
 import sys
 import subprocess
 import os
 from pathlib import Path
+from shutil import which
 
 class HTTPProber:
     def __init__(self, domain, output_dir):
@@ -16,19 +16,36 @@ class HTTPProber:
         self.output_dir = output_dir
     
     def get_input_file(self):
-        """Get the subdomain list file"""
+        """Get the subdomain list and prepare with protocols"""
         subdomain_file = f"{self.output_dir}/all_subdomains.txt"
         
         if os.path.exists(subdomain_file):
             print(f"[✓] Found subdomain list: {subdomain_file}")
-            return subdomain_file
+            return self.prepare_urls(subdomain_file)
         
-        # Fallback to just the domain
         print(f"[!] No subdomain list found, using domain only")
         temp_file = f"{self.output_dir}/temp_domain.txt"
         with open(temp_file, 'w') as f:
-            f.write(f"{self.domain}\n")
+            f.write(f"https://{self.domain}\n")
+            f.write(f"http://{self.domain}\n")
         return temp_file
+    
+    def prepare_urls(self, input_file):
+        """Add protocols and filter invalid subdomains"""
+        output_file = f"{self.output_dir}/prepared_subdomains.txt"
+        
+        try:
+            with open(input_file, 'r') as infile, open(output_file, 'w') as outfile:
+                for line in infile:
+                    subdomain = line.strip()
+                    if subdomain and not subdomain.startswith('#') and '.' in subdomain:  # Filter invalid
+                        outfile.write(f"https://{subdomain}\n")
+                        outfile.write(f"http://{subdomain}\n")
+            print(f"[✓] Prepared {output_file} with protocols")
+            return output_file
+        except Exception as e:
+            print(f"[!] Error preparing URLs: {str(e)}", file=sys.stderr)
+            return None
     
     def run_httpx(self, input_file):
         """Run httpx to find live hosts"""
@@ -37,7 +54,6 @@ class HTTPProber:
         
         output_file = f"{self.output_dir}/httpx_results.txt"
         
-        # httpx command
         httpx_cmd = [
             'httpx',
             '-l', input_file,
@@ -53,40 +69,27 @@ class HTTPProber:
         ]
         
         try:
-            # Run httpx
             result = subprocess.run(
                 httpx_cmd,
                 capture_output=True,
                 text=True,
-                timeout=600  # 10 minute timeout
+                timeout=600
             )
             
-            if result.returncode == 0 or os.path.exists(output_file):
-                # Count results
-                if os.path.exists(output_file):
-                    with open(output_file, 'r') as f:
-                        count = sum(1 for line in f if line.strip())
-                    
-                    print(f"[✓] HTTP probing completed")
-                    print(f"[✓] Found {count} live hosts")
-                    return True
-                else:
-                    print("[!] No live hosts found")
-                    return False
+            if os.path.exists(output_file):
+                with open(output_file, 'r') as f:
+                    count = sum(1 for line in f if line.strip())
+                print(f"[✓] HTTP probing completed")
+                print(f"[✓] Found {count} live hosts")
+                return True
             else:
-                print(f"[!] HTTP probing failed")
-                if result.stderr:
-                    print(f"[!] Error: {result.stderr}")
+                print("[!] No live hosts found", file=sys.stderr)
                 return False
-                
         except subprocess.TimeoutExpired:
-            print("[!] HTTP probing timed out")
-            return False
-        except FileNotFoundError:
-            print("[!] httpx not found. Install with: go install github.com/projectdiscovery/httpx/cmd/httpx@latest")
+            print("[!] HTTP probing timed out", file=sys.stderr)
             return False
         except Exception as e:
-            print(f"[!] Error during HTTP probing: {str(e)}")
+            print(f"[!] Error during HTTP probing: {str(e)}", file=sys.stderr)
             return False
     
     def parse_results(self):
@@ -95,7 +98,7 @@ class HTTPProber:
         summary_file = f"{self.output_dir}/httpx_summary.txt"
         
         if not os.path.exists(results_file):
-            print("[!] No results file found")
+            print("[!] No results file found", file=sys.stderr)
             return
         
         print("[*] Parsing results...")
@@ -104,22 +107,18 @@ class HTTPProber:
             with open(results_file, 'r') as f:
                 results = [line.strip() for line in f if line.strip()]
             
-            # Categorize by status code
-            live_hosts = []
             status_codes = {}
+            live_hosts = []
             
             for line in results:
                 parts = line.split()
                 if parts:
                     url = parts[0]
                     live_hosts.append(url)
-                    
-                    # Try to extract status code if present
                     if '[' in line and ']' in line:
                         status = line[line.find('[')+1:line.find(']')]
                         status_codes[status] = status_codes.get(status, 0) + 1
             
-            # Create summary
             with open(summary_file, 'w') as f:
                 f.write(f"HTTP PROBING SUMMARY FOR: {self.domain}\n")
                 f.write("=" * 60 + "\n\n")
@@ -142,11 +141,11 @@ class HTTPProber:
             print(f"[✓] Total live hosts: {len(live_hosts)}")
             
         except Exception as e:
-            print(f"[!] Error parsing results: {str(e)}")
+            print(f"[!] Error parsing results: {str(e)}", file=sys.stderr)
 
 def main():
     if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <domain> <output_dir>")
+        print(f"Usage: {sys.argv[0]} <domain> <output_dir>", file=sys.stderr)
         sys.exit(1)
     
     domain = sys.argv[1]
@@ -156,22 +155,20 @@ def main():
     print(f"HTTP PROBING - {domain}")
     print("=" * 60)
     
-    # Check if httpx is installed
-    if subprocess.run(['which', 'httpx'], capture_output=True).returncode != 0:
-        print("[!] httpx is not installed")
-        print("[!] Install with: go install github.com/projectdiscovery/httpx/cmd/httpx@latest")
+    if not which('httpx'):
+        print("[!] httpx is not installed", file=sys.stderr)
+        print("[!] Install with: go install github.com/projectdiscovery/httpx/cmd/httpx@latest", file=sys.stderr)
         sys.exit(1)
     
     prober = HTTPProber(domain, output_dir)
     
-    # Get input file
     input_file = prober.get_input_file()
+    if not input_file:
+        sys.exit(1)
     
-    # Run httpx
     success = prober.run_httpx(input_file)
     
     if success:
-        # Parse results
         prober.parse_results()
     
     print("\n[✓] HTTP probing complete!")
