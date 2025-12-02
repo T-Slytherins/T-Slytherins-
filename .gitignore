@@ -1,5 +1,23 @@
 # T-SLYTHERINS custom ignores
 
+# Virtual environment
+venv/
+.env/
+
+# Output directories
+T-SLYTHERINS-OUTPUT-*/
+*.log
+
+# Temporary files
+*.pyc
+__pycache__/
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+
 # Output / results / reports / screenshots
 output/
 outputs/
