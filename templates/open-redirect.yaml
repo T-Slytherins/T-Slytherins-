@@ -1,0 +1,22 @@
+id: open-redirect
+
+info:
+  name: Open Redirect
+  author: custom-adapter
+  severity: medium
+  description: Detects open redirects by injecting external URLs and checking location headers.
+  tags: redirect
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}?redirect=https://evil.com"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "Location: https://evil.com"
+      - type: status
+        status:
+          - 302
