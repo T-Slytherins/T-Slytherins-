@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# T-SLYTHERINS Installer Script
+# T-SLYTHERINS Installer Script (Fixed Version)
 # Fixes: Better error handling, path management, dependency checks
 
 set -e  # Exit on error
@@ -11,7 +11,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║           T-SLYTHERINS Installer       ║${NC}"
+echo -e "${GREEN}║   T-SLYTHERINS Installer (Fixed)      ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
 
 # Check if running as root
@@ -60,13 +60,23 @@ SYSTEM_DEPS=(
     "python3-pip"
     "nmap"
     "firefox-esr"
-    "chromium"
     "xterm"
+)
+
+# Try gnome-terminal separately (can fail)
+OPTIONAL_DEPS=(
     "gnome-terminal"
+    "chromium"
 )
 
 for dep in "${SYSTEM_DEPS[@]}"; do
     install_package "$dep"
+done
+
+# Install optional packages (don't fail if they error)
+for dep in "${OPTIONAL_DEPS[@]}"; do
+    echo -e "${YELLOW}[*] Trying to install $dep...${NC}"
+    apt-get install -y "$dep" 2>/dev/null || echo -e "${YELLOW}[!] $dep not available, skipping${NC}"
 done
 
 # Install Go
@@ -107,9 +117,14 @@ chown -R "$ACTUAL_USER:$ACTUAL_USER" "$GOPATH"
 
 # Install Python dependencies
 echo -e "${YELLOW}[*] Installing Python dependencies...${NC}"
-su - "$ACTUAL_USER" -c "pip3 install --user --upgrade pillow requests python-nmap dnspython" || {
-    echo -e "${RED}[!] Failed to install Python dependencies${NC}"
-    exit 1
+echo -e "${BLUE}[*] Note: Python packages will be installed in virtual environment${NC}"
+echo -e "${BLUE}[*] This is the recommended approach for Kali Linux 2024+${NC}"
+
+# Try to install with --user flag first, if it fails, note it
+su - "$ACTUAL_USER" -c "pip3 install --user --upgrade pillow requests python-nmap dnspython 2>/dev/null" || {
+    echo -e "${YELLOW}[!] System Python is externally managed (this is normal)${NC}"
+    echo -e "${YELLOW}[*] Python packages will be installed via virtual environment${NC}"
+    echo -e "${YELLOW}[*] Run ./install_with_venv.sh after this completes${NC}"
 }
 
 # Install Go-based tools
@@ -152,38 +167,18 @@ mkdir -p ./modules
 chown -R "$ACTUAL_USER:$ACTUAL_USER" ./modules
 
 echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║         Installation Complete!         ║${NC}"
+echo -e "${GREEN}║     Installation Complete!             ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "${YELLOW}[*] Next steps:${NC}"
+echo -e "${CYAN}[*] Go tools installed successfully${NC}"
+echo ""
+echo -e "${YELLOW}[*] IMPORTANT - Next Steps:${NC}"
 echo -e "    1. Run: ${GREEN}source /etc/profile.d/golang.sh${NC}"
-echo -e "    2. Verify: ${GREEN}subfinder -version${NC}"
-echo -e "    3. Execute: ${GREEN}./recon_slytherins${NC}"
+echo -e "    2. Setup Python venv: ${GREEN}./install_with_venv.sh${NC}"
+echo -e "    3. Verify: ${GREEN}subfinder -version${NC}"
+echo -e "    4. Execute: ${GREEN}./run_recon.sh${NC}"
+echo ""
+echo -e "${BLUE}[*] Why venv? Kali Linux 2024+ requires virtual environments${NC}"
+echo -e "${BLUE}[*] This keeps your system Python clean and safe${NC}"
 echo ""
 echo -e "${YELLOW}[*] Note: Logout and login again for PATH changes to take effect${NC}"
-
-
-# Create Python virtual environment
-VENV_DIR="$ACTUAL_HOME/recon_venv"
-echo -e "${YELLOW}[*] Setting up Python virtual environment at $VENV_DIR...${NC}"
-su - "$ACTUAL_USER" -c "python3 -m venv $VENV_DIR" || {
-    echo -e "${RED}[!] Failed to create virtual environment${NC}"
-    exit 1
-}
-
-# Activate virtual environment and install Python dependencies inside it
-echo -e "${YELLOW}[*] Activating virtual environment and installing Python packages...${NC}"
-su - "$ACTUAL_USER" -c "source $VENV_DIR/bin/activate && pip install --upgrade pip && pip install pillow requests python-nmap dnspython" || {
-    echo -e "${RED}[!] Failed to install Python packages in virtual environment${NC}"
-    exit 1
-}
-
-# Add virtual environment activation to main script (optional)
-if [ -f "./recon_slytherins" ]; then
-    echo -e "${YELLOW}[*] Adding virtual environment auto-activation to main script...${NC}"
-    su - "$ACTUAL_USER" -c "sed -i '1i source $VENV_DIR/bin/activate' ./recon_slytherins" || {
-        echo -e "${RED}[!] Failed to modify main script for venv activation${NC}"
-    }
-fi
-
-echo -e "${GREEN}[✓] Virtual environment ready and integrated${NC}"
