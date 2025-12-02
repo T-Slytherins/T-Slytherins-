@@ -1,0 +1,22 @@
+id: path-traversal
+
+info:
+  name: Path Traversal
+  author: custom-adapter
+  severity: high
+  description: Detects path traversal by attempting to access /etc/passwd.
+  tags: traversal
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/../../../../etc/passwd"
+    matchers-condition: and
+    matchers:
+      - type: regex
+        regex:
+          - "root:.*:0:0:"
+        part: body
+      - type: status
+        status:
+          - 200
