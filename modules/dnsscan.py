@@ -2,11 +2,9 @@
 
 """
 DNS Reconnaissance Module 
-Fixes: Better DNS query handling, timeout management, error handling
 """
 
 import sys
-import subprocess
 import socket
 import dns.resolver
 import dns.zone
@@ -32,18 +30,15 @@ class DNSScanner:
         
         try:
             answers = self.resolver.resolve(target, record_type)
-            results = []
-            for rdata in answers:
-                results.append(str(rdata))
-            return results
+            return [str(rdata) for rdata in answers]
         except dns.resolver.NXDOMAIN:
             return [f"[!] Domain {target} does not exist"]
         except dns.resolver.NoAnswer:
             return [f"[!] No {record_type} records found"]
         except dns.resolver.Timeout:
             return [f"[!] Query timeout for {record_type}"]
-        except Exception as e:
-            return [f"[!] Error querying {record_type}: {str(e)}"]
+        except dns.exception.DNSException as e:
+            return [f"[!] DNS error querying {record_type}: {str(e)}"]
     
     def scan_records(self):
         """Scan all common DNS record types"""
@@ -75,63 +70,46 @@ class DNSScanner:
         
         zone_file = f"{self.dns_dir}/zone_attempt.txt"
         
-        try:
-            # Get nameservers
-            ns_records = self.query_record('NS')
-            
-            with open(zone_file, 'w') as f:
-                f.write(f"ZONE TRANSFER ATTEMPT FOR: {self.domain}\n")
-                f.write("=" * 60 + "\n\n")
-                
-                zone_transfer_success = False
-                
-                for ns in ns_records:
-                    if ns.startswith('[!]'):
-                        f.write(f"{ns}\n")
-                        continue
-                    
-                    ns = ns.rstrip('.')
-                    print(f"  [*] Trying nameserver: {ns}")
-                    f.write(f"Nameserver: {ns}\n")
-                    f.write("-" * 40 + "\n")
-                    
-                    try:
-                        # Attempt zone transfer
-                        zone = dns.zone.from_xfr(
-                            dns.query.xfr(ns, self.domain, timeout=10)
-                        )
-                        
-                        f.write("[!] ZONE TRANSFER SUCCESSFUL!\n")
-                        f.write("Zone contents:\n")
-                        for name, node in zone.nodes.items():
-                            f.write(f"  {name}.{self.domain}\n")
-                        
-                        zone_transfer_success = True
-                        print(f"  [!] Zone transfer successful on {ns}!")
-                        
-                    except dns.exception.FormError:
-                        f.write("[✓] Zone transfer denied (REFUSED)\n")
-                        print(f"  [✓] Zone transfer denied on {ns}")
-                    except Exception as e:
-                        f.write(f"[✓] Zone transfer failed: {str(e)}\n")
-                        print(f"  [✓] Zone transfer failed on {ns}")
-                    
-                    f.write("\n")
-                
-                if not zone_transfer_success:
-                    f.write("\n[✓] No zone transfers allowed (Good security!)\n")
-                    print("[✓] No zone transfers allowed")
+        ns_records = self.query_record('NS')
         
-        except Exception as e:
-            with open(zone_file, 'w') as f:
-                f.write(f"Error during zone transfer test: {str(e)}\n")
-            print(f"[!] Error during zone transfer test: {str(e)}")
+        with open(zone_file, 'w') as f:
+            f.write(f"ZONE TRANSFER ATTEMPT FOR: {self.domain}\n")
+            f.write("=" * 60 + "\n\n")
+            
+            zone_transfer_success = False
+            
+            for ns in ns_records:
+                if ns.startswith('[!]'):
+                    f.write(f"{ns}\n")
+                    continue
+                
+                ns = ns.rstrip('.')
+                print(f"  [*] Trying NS: {ns}")
+                
+                try:
+                    zone = dns.zone.from_xfr(dns.query.xfr(ns, self.domain))
+                    zone_transfer_success = True
+                    f.write(f"[!] Zone transfer successful from {ns}!\n")
+                    print(f"  [!] Zone transfer successful!")
+                    for name, node in zone.nodes.items():
+                        f.write(f"  {name}: {node.to_text(name)}\n")
+                    f.write("\n")
+                except dns.exception.FormError:
+                    f.write(f"[!] Zone transfer failed (FormError) from {ns}\n")
+                    print(f"  [!] Zone transfer failed (FormError)")
+                except Exception as e:
+                    f.write(f"[!] Zone transfer failed from {ns}: {str(e)}\n")
+                    print(f"  [!] Zone transfer failed: {str(e)}")
+            
+            if not zone_transfer_success:
+                f.write("[✓] No zone transfer possible\n")
+                print("  [✓] No zone transfer possible")
         
         print(f"[✓] Zone transfer results saved to: {zone_file}")
     
     def check_misconfigurations(self):
-        """Check for common DNS misconfigurations"""
-        print("[*] Checking for misconfigurations...")
+        """Check for DNS misconfigurations"""
+        print("[*] Checking DNS misconfigurations...")
         
         misconfig_file = f"{self.dns_dir}/misconfig.txt"
         
@@ -139,14 +117,14 @@ class DNSScanner:
             f.write(f"DNS MISCONFIGURATION CHECK FOR: {self.domain}\n")
             f.write("=" * 60 + "\n\n")
             
-            # Check for wildcard DNS
+            # Wildcard DNS check
             print("  [*] Checking wildcard DNS...")
             f.write("Wildcard DNS Check:\n")
             f.write("-" * 40 + "\n")
             
             test_subdomains = [
-                f"nonexistent-{i}-test.{self.domain}" 
-                for i in range(3)
+                f"wildcardtest123456789.{self.domain}",
+                f"nonexistent987654321.{self.domain}"
             ]
             
             wildcard_ips = set()
@@ -154,7 +132,7 @@ class DNSScanner:
                 try:
                     result = socket.gethostbyname(test_sub)
                     wildcard_ips.add(result)
-                except:
+                except socket.gaierror:
                     pass
             
             if wildcard_ips:
@@ -192,30 +170,25 @@ class DNSScanner:
             f.write("DMARC Check:\n")
             f.write("-" * 40 + "\n")
             
-            try:
-                dmarc_records = self.query_record('TXT', f"_dmarc.{self.domain}")
-                dmarc_found = False
-                
-                for record in dmarc_records:
-                    if 'dmarc' in record.lower():
-                        f.write(f"[✓] DMARC record found: {record}\n")
-                        dmarc_found = True
-                
-                if not dmarc_found:
-                    f.write("[!] No DMARC record found\n")
-                    print("  [!] No DMARC record found")
-                else:
-                    print("  [✓] DMARC record found")
-                    
-            except Exception as e:
-                f.write(f"[!] No DMARC record found\n")
+            dmarc_records = self.query_record('TXT', f"_dmarc.{self.domain}")
+            dmarc_found = False
+            
+            for record in dmarc_records:
+                if 'dmarc' in record.lower():
+                    f.write(f"[✓] DMARC record found: {record}\n")
+                    dmarc_found = True
+            
+            if not dmarc_found:
+                f.write("[!] No DMARC record found\n")
                 print("  [!] No DMARC record found")
+            else:
+                print("  [✓] DMARC record found")
         
         print(f"[✓] Misconfiguration check saved to: {misconfig_file}")
 
 def main():
     if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <domain> <output_dir>")
+        print(f"Usage: {sys.argv[0]} <domain> <output_dir>", file=sys.stderr)
         sys.exit(1)
     
     domain = sys.argv[1]
@@ -234,10 +207,10 @@ def main():
         print()
         scanner.check_misconfigurations()
     except KeyboardInterrupt:
-        print("\n[!] Scan interrupted by user")
+        print("\n[!] Scan interrupted by user", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        print(f"[!] Error during DNS scan: {str(e)}")
+        print(f"[!] Error during DNS scan: {str(e)}", file=sys.stderr)
         sys.exit(1)
     
     print("\n[✓] DNS reconnaissance complete!")
