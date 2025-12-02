@@ -1,0 +1,24 @@
+id: git-config-exposure
+
+info:
+  name: Exposed Git Config
+  author: custom-adapter
+  severity: high
+  description: Detects exposed .git/config files revealing repository info.
+  tags: exposure,git
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.git/config"
+    matchers-condition: and
+    matchers:
+      - type: word
+        words:
+          - "[core]"
+          - "repositoryformatversion"
+        condition: and
+        part: body
+      - type: status
+        status:
+          - 200
