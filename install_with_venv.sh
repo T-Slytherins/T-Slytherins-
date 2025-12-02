@@ -17,7 +17,7 @@ VENV_DIR="venv"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║   T-SLYTHERINS Virtual Environment Installer          ║${NC}"
+echo -e "${CYAN}║        T-SLYTHERINS Virtual Environment Installer      ║${NC}"
 echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -328,7 +328,7 @@ echo ""
 
 # Display summary
 echo -e "${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║          Installation Complete!                        ║${NC}"
+echo -e "${GREEN}║                  Installation Complete!                ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "${CYAN}Virtual Environment Setup:${NC}"
